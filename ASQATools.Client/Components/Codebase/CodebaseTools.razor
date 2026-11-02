@@ -229,7 +229,10 @@ else
             if (resp.IsSuccessStatusCode)
             {
                 var children = await resp.Content.ReadFromJsonAsync<List<TreeNodeItemDto>>() ?? new();
-                foreach (var c in children) c.IsSelected = parentNode.IsSelected;
+                foreach (var c in children)
+                {
+                    c.IsSelected = parentNode.IsSelected && !c.IsDefaultExcluded;
+                }
                 parentNode.Children = children;
                 StateHasChanged();
             }
@@ -244,7 +247,7 @@ else
 
     private void SetSelectionRecursive(TreeNodeItemDto node, bool selected)
     {
-        node.IsSelected = selected;
+        node.IsSelected = selected && !node.IsDefaultExcluded;
         foreach (var child in node.Children) SetSelectionRecursive(child, selected);
     }
 

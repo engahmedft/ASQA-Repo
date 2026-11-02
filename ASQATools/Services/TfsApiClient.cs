@@ -222,9 +222,53 @@ public class TfsApiClient
         var response = await client.GetAsync(url);
         if (!response.IsSuccessStatusCode) return new List<TfsIteration>();
 
-        var stream = await response.Content.ReadAsStreamAsync();
-        var result = await JsonSerializer.DeserializeAsync<TfsListResponse<TfsIteration>>(stream, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
-        return result?.Value ?? new List<TfsIteration>();
+        try
+        {
+            var text = await response.Content.ReadAsStringAsync();
+            using var doc = JsonDocument.Parse(text);
+            var list = new List<TfsIteration>();
+            if (doc.RootElement.TryGetProperty("value", out var val) && val.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var elem in val.EnumerateArray())
+                {
+                    var iter = new TfsIteration();
+                    if (elem.TryGetProperty("id", out var idElem) && idElem.TryGetInt32(out int id)) iter.Id = id;
+                    if (elem.TryGetProperty("description", out var descElem) && descElem.ValueKind == JsonValueKind.String) iter.Description = descElem.GetString();
+                    if (elem.TryGetProperty("reason", out var reasonElem) && reasonElem.ValueKind == JsonValueKind.String) iter.Reason = reasonElem.GetString();
+                    if (elem.TryGetProperty("createdDate", out var cdElem) && cdElem.TryGetDateTime(out var cd)) iter.CreatedDate = cd;
+                    if (elem.TryGetProperty("updatedDate", out var udElem) && udElem.TryGetDateTime(out var ud)) iter.UpdatedDate = ud;
+
+                    if (elem.TryGetProperty("author", out var authorElem) && authorElem.ValueKind == JsonValueKind.Object)
+                    {
+                        iter.Author = new TfsIdentity
+                        {
+                            DisplayName = authorElem.TryGetProperty("displayName", out var dn) && dn.ValueKind == JsonValueKind.String ? dn.GetString() ?? "" : ""
+                        };
+                    }
+
+                    if (elem.TryGetProperty("sourceRefCommit", out var srcElem))
+                    {
+                        if (srcElem.ValueKind == JsonValueKind.Object && srcElem.TryGetProperty("commitId", out var cid))
+                        {
+                            string commitSha = cid.ValueKind == JsonValueKind.String ? cid.GetString() ?? "" : cid.ToString();
+                            string commitComment = srcElem.TryGetProperty("comment", out var cm) && cm.ValueKind == JsonValueKind.String ? cm.GetString() ?? "" : "";
+                            iter.SourceRefCommit = new TfsCommitRef { CommitId = commitSha, Comment = commitComment };
+                        }
+                        else if (srcElem.ValueKind == JsonValueKind.String)
+                        {
+                            iter.SourceRefCommit = new TfsCommitRef { CommitId = srcElem.GetString() ?? "" };
+                        }
+                    }
+
+                    list.Add(iter);
+                }
+            }
+            return list;
+        }
+        catch
+        {
+            return new List<TfsIteration>();
+        }
     }
 
     public async Task<List<TfsChangeEntry>> GetIterationChangesAsync(HttpClient client, string serverUrl, string collection, string project, string repo, string prId, int iterationId)

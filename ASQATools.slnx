@@ -1,6 +1,7 @@
 <Solution>
   <Project Path="ASQATools.Shared/ASQATools.Shared.csproj" />
   <Project Path="ASQATools.Client/ASQATools.Client.csproj" />
+  <Project Path="ASQATools.LocalBridge/ASQATools.LocalBridge.csproj" />
   <Project Path="ASQATools/ASQATools.csproj" />
   <Project Path="ASQATools.Tests/ASQATools.Tests.csproj" />
 </Solution>

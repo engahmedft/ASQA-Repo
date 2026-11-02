@@ -47,6 +47,50 @@ WCFG
     cp -rf ASQATools/Templates/* "$PUBLISH_DIR/Templates/"
     rm -rf "$PUBLISH_DIR/pr_reviews_data"
 
+    echo "📦 Packaging ASQA Client Agents..."
+    AGENT_STAGING="$STAGING_DIR/agent"
+    RUNTIME_CACHE="ASQATools/App_Data/runtime_cache"
+    CACHE_BIN="$RUNTIME_CACHE/win-x64-binaries"
+    mkdir -p "$AGENT_STAGING" "$PUBLISH_DIR/wwwroot/downloads" "ASQATools/wwwroot/downloads" "$RUNTIME_CACHE"
+    dotnet publish ASQATools.LocalBridge/ASQATools.LocalBridge.csproj -c Release -o "$AGENT_STAGING"
+    cp -f ASQATools.LocalBridge/start-agent.sh "$AGENT_STAGING/"
+    chmod +x "$AGENT_STAGING/start-agent.sh" 2>/dev/null || true
+
+    # 1. Package Lightweight ZIP
+    if command -v zip &> /dev/null; then
+        (cd "$AGENT_STAGING" && zip -r -q "$OLDPWD/$PUBLISH_DIR/wwwroot/downloads/ASQA_LocalAgent.zip" .)
+    else
+        powershell.exe -NoProfile -Command "Compress-Archive -Path '$AGENT_STAGING\*' -DestinationPath '$PUBLISH_DIR/wwwroot/downloads/ASQA_LocalAgent.zip' -Force"
+    fi
+
+    # 2. Check for or harvest portable runtime for Full Bundle fallback (1-time)
+    if [ ! -f "$CACHE_BIN/dotnet.exe" ]; then
+        LOCAL_DOTNET="/c/Program Files/dotnet"
+        if [ ! -d "$LOCAL_DOTNET" ]; then LOCAL_DOTNET="C:/Program Files/dotnet"; fi
+        if [ -f "$LOCAL_DOTNET/dotnet.exe" ] && [ -d "$LOCAL_DOTNET/shared/Microsoft.AspNetCore.App" ]; then
+            echo "⚡ Harvesting .NET runtime from local machine: $LOCAL_DOTNET..."
+            mkdir -p "$CACHE_BIN/shared" "$CACHE_BIN/host"
+            cp -f "$LOCAL_DOTNET/dotnet.exe" "$CACHE_BIN/"
+            cp -rf "$LOCAL_DOTNET/host" "$CACHE_BIN/" 2>/dev/null || true
+            cp -rf "$LOCAL_DOTNET/shared/Microsoft.NETCore.App" "$CACHE_BIN/shared/" 2>/dev/null || true
+            cp -rf "$LOCAL_DOTNET/shared/Microsoft.AspNetCore.App" "$CACHE_BIN/shared/" 2>/dev/null || true
+        fi
+    fi
+
+    # 3. Package Full Self-Contained Bundle if runtime is cached
+    if [ -f "$CACHE_BIN/dotnet.exe" ]; then
+        echo "🛡️ Packaging Full Standalone Bundle with bundled runtime..."
+        mkdir -p "$AGENT_STAGING/runtime"
+        cp -rf "$CACHE_BIN/"* "$AGENT_STAGING/runtime/"
+        if command -v zip &> /dev/null; then
+            (cd "$AGENT_STAGING" && zip -r -q "$OLDPWD/$PUBLISH_DIR/wwwroot/downloads/ASQA_LocalAgent_Full.zip" .)
+        else
+            powershell.exe -NoProfile -Command "Compress-Archive -Path '$AGENT_STAGING\*' -DestinationPath '$PUBLISH_DIR/wwwroot/downloads/ASQA_LocalAgent_Full.zip' -Force"
+        fi
+        rm -rf "$AGENT_STAGING/runtime"
+    fi
+    cp -f "$PUBLISH_DIR/wwwroot/downloads/ASQA_LocalAgent"*.zip "ASQATools/wwwroot/downloads/" 2>/dev/null || true
+
 elif [ "$MODE" == "2" ]; then
     echo "⚡ Building [Option 2: Fast Delta Deploy (App & UI Only)]..."
     dotnet publish ASQATools/ASQATools.csproj -c Release -r win-x64 --self-contained true -o "$STAGING_DIR"
@@ -59,6 +103,50 @@ elif [ "$MODE" == "2" ]; then
     cp -f "$STAGING_DIR"/ASQATools.Client.pdb "$PUBLISH_DIR/" 2>/dev/null || true
     cp -f "$STAGING_DIR"/ASQATools.deps.json "$PUBLISH_DIR/"
     cp -rf "$STAGING_DIR"/wwwroot "$PUBLISH_DIR/"
+
+    echo "📦 Packaging ASQA Client Agents..."
+    AGENT_STAGING="$STAGING_DIR/agent"
+    RUNTIME_CACHE="ASQATools/App_Data/runtime_cache"
+    CACHE_BIN="$RUNTIME_CACHE/win-x64-binaries"
+    mkdir -p "$AGENT_STAGING" "$PUBLISH_DIR/wwwroot/downloads" "ASQATools/wwwroot/downloads" "$RUNTIME_CACHE"
+    dotnet publish ASQATools.LocalBridge/ASQATools.LocalBridge.csproj -c Release -o "$AGENT_STAGING"
+    cp -f ASQATools.LocalBridge/start-agent.sh "$AGENT_STAGING/"
+    chmod +x "$AGENT_STAGING/start-agent.sh" 2>/dev/null || true
+
+    # 1. Package Lightweight ZIP
+    if command -v zip &> /dev/null; then
+        (cd "$AGENT_STAGING" && zip -r -q "$OLDPWD/$PUBLISH_DIR/wwwroot/downloads/ASQA_LocalAgent.zip" .)
+    else
+        powershell.exe -NoProfile -Command "Compress-Archive -Path '$AGENT_STAGING\*' -DestinationPath '$PUBLISH_DIR/wwwroot/downloads/ASQA_LocalAgent.zip' -Force"
+    fi
+
+    # 2. Check for or harvest portable runtime for Full Bundle fallback (1-time)
+    if [ ! -f "$CACHE_BIN/dotnet.exe" ]; then
+        LOCAL_DOTNET="/c/Program Files/dotnet"
+        if [ ! -d "$LOCAL_DOTNET" ]; then LOCAL_DOTNET="C:/Program Files/dotnet"; fi
+        if [ -f "$LOCAL_DOTNET/dotnet.exe" ] && [ -d "$LOCAL_DOTNET/shared/Microsoft.AspNetCore.App" ]; then
+            echo "⚡ Harvesting .NET runtime from local machine: $LOCAL_DOTNET..."
+            mkdir -p "$CACHE_BIN/shared" "$CACHE_BIN/host"
+            cp -f "$LOCAL_DOTNET/dotnet.exe" "$CACHE_BIN/"
+            cp -rf "$LOCAL_DOTNET/host" "$CACHE_BIN/" 2>/dev/null || true
+            cp -rf "$LOCAL_DOTNET/shared/Microsoft.NETCore.App" "$CACHE_BIN/shared/" 2>/dev/null || true
+            cp -rf "$LOCAL_DOTNET/shared/Microsoft.AspNetCore.App" "$CACHE_BIN/shared/" 2>/dev/null || true
+        fi
+    fi
+
+    # 3. Package Full Self-Contained Bundle if runtime is cached
+    if [ -f "$CACHE_BIN/dotnet.exe" ]; then
+        echo "🛡️ Packaging Full Standalone Bundle with bundled runtime..."
+        mkdir -p "$AGENT_STAGING/runtime"
+        cp -rf "$CACHE_BIN/"* "$AGENT_STAGING/runtime/"
+        if command -v zip &> /dev/null; then
+            (cd "$AGENT_STAGING" && zip -r -q "$OLDPWD/$PUBLISH_DIR/wwwroot/downloads/ASQA_LocalAgent_Full.zip" .)
+        else
+            powershell.exe -NoProfile -Command "Compress-Archive -Path '$AGENT_STAGING\*' -DestinationPath '$PUBLISH_DIR/wwwroot/downloads/ASQA_LocalAgent_Full.zip' -Force"
+        fi
+        rm -rf "$AGENT_STAGING/runtime"
+    fi
+    cp -f "$PUBLISH_DIR/wwwroot/downloads/ASQA_LocalAgent"*.zip "ASQATools/wwwroot/downloads/" 2>/dev/null || true
     mkdir -p "$PUBLISH_DIR/Templates"
     cp -rf ASQATools/Templates/* "$PUBLISH_DIR/Templates/"
     rm -rf "$STAGING_DIR"

@@ -1,4 +1,7 @@
 @using ASQATools.Shared.Models
+@using ASQATools.Client.Services
+@inject ClientBridgeService BridgeService
+@implements IDisposable
 
 <nav class="navbar navbar-expand-lg navbar-dark bg-dark px-3 py-2 shadow-sm border-bottom border-dark-subtle">
     <div class="container-fluid px-0">
@@ -50,6 +53,28 @@
                 }
             </div>
             <div class="d-flex align-items-center gap-2">
+                <!-- Premium Desktop Bridge Status Pill -->
+                @if (BridgeService.IsConnected)
+                {
+                    <button type="button" class="btn btn-sm d-inline-flex align-items-center gap-2 px-3 py-1 rounded-pill text-nowrap shadow-sm border"
+                            style="background: rgba(34, 197, 94, 0.15); border-color: rgba(74, 222, 128, 0.45) !important; color: #4ade80;"
+                            @onclick="() => ShowBridgeModal = true" title="Click to open Desktop Bridge Manager">
+                        <span class="spinner-grow spinner-grow-sm text-success" style="width: 7px; height: 7px;" role="status"></span>
+                        <span class="font-monospace fw-bold" style="font-size: 0.82rem; letter-spacing: 0.3px;">
+                            Desktop Bridge :@BridgeService.CurrentPort
+                        </span>
+                    </button>
+                }
+                else
+                {
+                    <button type="button" class="btn btn-sm d-inline-flex align-items-center gap-2 px-3 py-1 rounded-pill text-nowrap border"
+                            style="background: rgba(148, 163, 184, 0.12); border-color: rgba(148, 163, 184, 0.25) !important; color: #cbd5e1;"
+                            @onclick="() => ShowBridgeModal = true" title="Click to connect or setup Desktop Bridge">
+                        <span class="rounded-circle d-inline-block bg-secondary" style="width: 7px; height: 7px;"></span>
+                        <span class="font-monospace" style="font-size: 0.82rem;">Desktop Bridge Offline</span>
+                    </button>
+                }
+
                 @if (AuthStatus?.IsAuthenticated == true)
                 {
                     <span class="badge bg-success p-2">👤 @(string.IsNullOrWhiteSpace(AuthStatus.DisplayName) ? AuthStatus.Username : AuthStatus.DisplayName)</span>
@@ -70,12 +95,17 @@
     </div>
 </nav>
 
+<DesktopBridgeModal Show="ShowBridgeModal" OnClose="() => ShowBridgeModal = false" />
+
 @code {
     [Parameter] public string CurrentTool { get; set; } = "pr-engine";
     [Parameter] public EventCallback<string> CurrentToolChanged { get; set; }
     [Parameter] public AuthStatusResponse? AuthStatus { get; set; }
     [Parameter] public EventCallback OnLogout { get; set; }
     [Parameter] public EventCallback OnShowLogin { get; set; }
+    [Parameter] public EventCallback<string> OnLog { get; set; }
+
+    private bool ShowBridgeModal = false;
 
     private bool HasPermission(string key)
     {
@@ -89,5 +119,22 @@
     {
         CurrentTool = tool;
         await CurrentToolChanged.InvokeAsync(tool);
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        BridgeService.OnChange += OnBridgeStateChanged;
+        BridgeService.OnLog += RelayLog;
+        BridgeService.StartHeartbeat();
+        await BridgeService.ConnectAsync();
+    }
+
+    private void OnBridgeStateChanged() => InvokeAsync(StateHasChanged);
+    private async void RelayLog(string msg) => await OnLog.InvokeAsync(msg);
+
+    public void Dispose()
+    {
+        BridgeService.OnChange -= OnBridgeStateChanged;
+        BridgeService.OnLog -= RelayLog;
     }
 }

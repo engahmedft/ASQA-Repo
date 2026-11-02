@@ -888,7 +888,7 @@ Branch divergence exists. You MUST start your '### 📋 Executive Summary' with 
         string prInput, 
         NetworkCredential? creds, 
         string? patToken, 
-        bool includeSystemComments = false)
+        bool includeSystemComments = true)
     {
         TryRunDailyCleanup(retentionDays: 3);
 
@@ -1000,6 +1000,159 @@ Branch divergence exists. You MUST start your '### 📋 Executive Summary' with 
         Log($"  * Saved File: {savePath}");
 
         return (bundleText, savePath);
+    }
+
+    public async Task<PrHistoryResponse> GetPrHistoryAsync(
+        string prInput, 
+        NetworkCredential? creds, 
+        string? patToken, 
+        bool includeSystemComments = true)
+    {
+        TryRunDailyCleanup(retentionDays: 3);
+
+        Log("Connecting to TFS API to fetch PR history, commits, and discussions...");
+        using var client = _tfs.CreateClient(creds, patToken);
+        var (serverUrl, collection, project, repo, prId) = ParsePrInput(prInput);
+
+        Log($"Retrieving PR #{prId} details, iterations, and discussion feed...");
+        var pr = await _tfs.GetPullRequestDetailsAsync(client, serverUrl, collection, project, repo, prId);
+        
+        List<TfsIteration> iterations = new();
+        try
+        {
+            iterations = await _tfs.GetPullRequestIterationsAsync(client, serverUrl, collection, project, repo, prId);
+        }
+        catch (Exception ex)
+        {
+            Log($"⚠️ Iterations fetch notice: {ex.Message}");
+        }
+
+        List<TfsThread> rawThreads = new();
+        try
+        {
+            rawThreads = await _tfs.GetPullRequestThreadsAsync(client, serverUrl, collection, project, repo, prId);
+        }
+        catch (Exception ex)
+        {
+            Log($"⚠️ Threads fetch notice: {ex.Message}");
+        }
+
+        var validThreads = rawThreads.Where(t => t != null && !t.IsDeleted).ToList();
+
+        // Generate discussions bundle
+        string threadsText = "";
+        string savedPath = "";
+        try
+        {
+            var exportRes = await ExtractThreadsAsync(prInput, creds, patToken, includeSystemComments);
+            threadsText = exportRes.ThreadsText;
+            savedPath = exportRes.SavedFilePath;
+        }
+        catch { }
+
+        var timeline = new List<PrHistoryItemDto>();
+
+        foreach (var iter in iterations)
+        {
+            string commitSha = iter.SourceRefCommit?.CommitId ?? "";
+            string commitComment = iter.SourceRefCommit?.Comment ?? "";
+            DateTime iterTime = iter.CreatedDate ?? iter.UpdatedDate ?? DateTime.MinValue;
+
+            timeline.Add(new PrHistoryItemDto
+            {
+                ItemType = "Iteration",
+                Timestamp = iterTime,
+                IterationId = iter.Id,
+                CommitId = commitSha,
+                AuthorName = iter.Author?.DisplayName ?? "Developer",
+                Description = iter.Description ?? "",
+                CommitComment = commitComment,
+                Reason = iter.Reason ?? "push"
+            });
+        }
+
+        foreach (var th in validThreads)
+        {
+            var activeComments = th.Comments?.Where(c => c != null && !c.IsDeleted).ToList() ?? new();
+            if (!includeSystemComments)
+            {
+                activeComments = activeComments.Where(c => !IsSystemComment(c)).ToList();
+            }
+            if (activeComments.Count == 0) continue;
+
+            var firstComment = activeComments.OrderBy(c => c.Id).FirstOrDefault();
+            DateTime thTime = firstComment?.PublishedDate ?? DateTime.MinValue;
+
+            bool isInline = th.ThreadContext != null && !string.IsNullOrWhiteSpace(th.ThreadContext.FilePath);
+            string filePath = th.ThreadContext?.FilePath ?? "";
+            int line = th.ThreadContext?.RightFileEnd?.Line ?? th.ThreadContext?.RightFileStart?.Line ?? 0;
+
+            string deepLink = "#";
+            if (isInline)
+            {
+                string encodedPath = Uri.EscapeDataString(filePath);
+                deepLink = $"{serverUrl.TrimEnd('/')}/{collection}/{project}/_git/{repo}/pullrequest/{prId}?_a=files&path={encodedPath}&line={line}&lineEnd={line}&lineStartColumn=1&lineEndColumn=1";
+            }
+
+            var commentsDto = activeComments.Select(c => new PrHistoryCommentDto
+            {
+                Id = c.Id,
+                ParentCommentId = c.ParentCommentId,
+                AuthorName = c.Author?.DisplayName ?? "Unknown",
+                Content = c.Content ?? "",
+                PublishedDate = c.PublishedDate,
+                IsSystem = IsSystemComment(c)
+            }).ToList();
+
+            timeline.Add(new PrHistoryItemDto
+            {
+                ItemType = "Thread",
+                Timestamp = thTime,
+                ThreadId = th.Id,
+                Status = th.Status,
+                StatusName = FormatThreadStatus(th.Status),
+                IsInline = isInline,
+                FilePath = filePath,
+                Line = line,
+                DeepLink = deepLink,
+                Comments = commentsDto
+            });
+        }
+
+        timeline = timeline.OrderBy(item => item.Timestamp).ToList();
+
+        int totalThreads = validThreads.Count;
+        int activeThreads = validThreads.Count(t => t.Status == 1);
+        int resolvedThreads = validThreads.Count(t => t.Status == 2);
+        int wontFixThreads = validThreads.Count(t => t.Status == 3);
+        int closedThreads = validThreads.Count(t => t.Status == 4);
+        int totalComments = validThreads.Sum(t => t.Comments?.Count(c => c != null && !c.IsDeleted) ?? 0);
+
+        Log($"✔ PR History & Timeline loaded: {iterations.Count} iteration(s), {totalThreads} thread(s), {totalComments} comment(s).");
+
+        return new PrHistoryResponse
+        {
+            PullRequestId = pr.PullRequestId,
+            Title = pr.Title ?? "",
+            Author = pr.CreatedBy?.DisplayName ?? "Author",
+            SourceBranch = (pr.SourceRefName ?? "").Replace("refs/heads/", ""),
+            TargetBranch = (pr.TargetRefName ?? "").Replace("refs/heads/", ""),
+            Status = pr.Status ?? "active",
+            RepositoryName = repo,
+            ServerUrl = serverUrl,
+            Collection = collection,
+            Project = project,
+            TotalIterations = iterations.Count,
+            TotalThreads = totalThreads,
+            ActiveThreads = activeThreads,
+            ResolvedThreads = resolvedThreads,
+            WontFixThreads = wontFixThreads,
+            ClosedThreads = closedThreads,
+            TotalComments = totalComments,
+            Timeline = timeline,
+            ThreadsText = threadsText,
+            SavedFilePath = savedPath
+        };
     }
 
     private static void AppendCommentBlock(StringBuilder sb, TfsComment comment, int indentLevel)

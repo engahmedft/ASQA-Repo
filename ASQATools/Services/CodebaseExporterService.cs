@@ -36,9 +36,8 @@ public class CodebaseExporterService
         foreach (var dir in dirInfo.GetDirectories().OrderBy(d => d.Name))
         {
             string rel = Path.GetRelativePath(rootPath, dir.FullName).Replace('\\', '/');
-            bool isDefaultExcluded = ExcludedDirectories.Contains(dir.Name) ||
-                                     dir.Name.StartsWith(".") ||
-                                     dir.Name.Equals("publish", StringComparison.OrdinalIgnoreCase);
+            var parts = rel.Split('/');
+            bool isDefaultExcluded = parts.Any(p => ExcludedDirectories.Contains(p) || p.StartsWith("."));
 
             bool hasKids = false;
             try { hasKids = dir.EnumerateFileSystemInfos().Any(); } catch { }
@@ -59,7 +58,10 @@ public class CodebaseExporterService
         foreach (var file in dirInfo.GetFiles().OrderBy(f => f.Name))
         {
             string rel = Path.GetRelativePath(rootPath, file.FullName).Replace('\\', '/');
-            bool isDefaultExcluded = ExcludedExtensions.Contains(file.Extension) || file.Name.StartsWith("._");
+            var parts = rel.Split('/');
+            bool isDefaultExcluded = ExcludedExtensions.Contains(file.Extension) || 
+                                     file.Name.StartsWith("._") ||
+                                     parts.Take(parts.Length - 1).Any(p => ExcludedDirectories.Contains(p) || p.StartsWith("."));
 
             result.Add(new TreeNodeItemDto
             {

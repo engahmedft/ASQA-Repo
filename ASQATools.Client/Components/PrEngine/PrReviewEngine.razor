@@ -36,7 +36,7 @@
     {
         <li class="nav-item">
             <button class="nav-link @(ActiveTab == "threads" ? "active fw-bold text-info border-bottom-0" : "text-secondary")"
-                    @onclick='() => ActiveTab = "threads"'>💬 Mode 4: Extract Discussions</button>
+                    @onclick='() => ActiveTab = "threads"'>📜 Mode 4: PR History & Discussions</button>
         </li>
     }
 </ul>
@@ -275,42 +275,279 @@
             </div>
         </div>
     }
-    else if (ActiveTab == "threads")
+        else if (ActiveTab == "threads")
     {
         <div class="col-12">
-            <div class="card shadow-sm p-3 bg-white" style="border: 1px solid #cbd5e1 !important;">
-                <div class="row g-3 align-items-end mb-3">
+            <!-- Search & Control Header -->
+            <div class="card shadow-sm p-3 bg-white mb-3" style="border: 1px solid #cbd5e1 !important;">
+                <div class="row g-3 align-items-end mb-2">
                     <div class="col-md-8">
                         <label class="form-label fw-bold text-dark">Pull Request Full URL:</label>
                         <input type="text" class="form-control" @bind="PrInput" style="background: #f8fafc; border: 1px solid #cbd5e1;" 
                                placeholder="Enter the full URL of the pull request" />
                     </div>
                     <div class="col-md-4">
-                        <button class="btn btn-info text-white w-100 py-2 fw-bold" @onclick="ExecuteExtractThreadsAsync" disabled="@IsProcessing">
-                            @(IsProcessing ? "Extracting Discussions..." : "💬 Extract All Discussions & Threads")
+                        <button class="btn btn-primary w-100 py-2 fw-bold shadow-sm" @onclick="ExecuteLoadHistoryAsync" disabled="@IsProcessing">
+                            @(IsProcessing ? "Loading History & Timeline..." : "📜 Load PR History & Timeline")
                         </button>
                     </div>
                 </div>
-                <div class="form-check form-switch pt-2 border-top">
-                    <input class="form-check-input" type="checkbox" id="sysCommentsSwitch" @bind="IncludeSystemCommentsInExtract" />
-                    <label class="form-check-label fw-bold text-dark" for="sysCommentsSwitch" style="cursor: pointer;">
-                        Include System Events & Automated Comments
-                    </label>
+
+                <div class="d-flex flex-wrap justify-content-between align-items-center pt-2 border-top">
+                    <div class="form-check form-switch mb-0">
+                        <input class="form-check-input" type="checkbox" id="sysCommentsSwitch" @bind="IncludeSystemCommentsInExtract" />
+                        <label class="form-check-label small fw-bold text-dark" for="sysCommentsSwitch" style="cursor: pointer;">
+                            Include System Events & Automated Changes
+                        </label>
+                    </div>
+
+                    @if (PrHistoryData != null)
+                    {
+                        <div class="d-flex gap-2">
+                            <button class="btn btn-sm btn-outline-success fw-bold" @onclick="ReCopyDiscussionsBundleFile">
+                                📋 Copy Export (.txt)
+                            </button>
+                            <button class="btn btn-sm btn-outline-primary fw-bold" @onclick="DownloadDiscussionsDirectly">
+                                ⬇️ Download (.txt)
+                            </button>
+                        </div>
+                    }
                 </div>
-                @if (!string.IsNullOrEmpty(LastThreadsFilePath))
+            </div>
+
+            @if (PrHistoryData != null)
+            {
+                <!-- PR Details & Metrics Summary Bar -->
+                <div class="card p-3 mb-3 bg-white shadow-sm" style="border: 1px solid #cbd5e1 !important;">
+                    <div class="d-flex flex-wrap justify-content-between align-items-center pb-2 mb-2 border-bottom">
+                        <div>
+                            <h5 class="fw-bold mb-0 text-dark">
+                                PR #@PrHistoryData.PullRequestId: @PrHistoryData.Title
+                            </h5>
+                            <small class="text-muted font-monospace">
+                                👤 @PrHistoryData.Author | 
+                                @PrHistoryData.SourceBranch ➔ @PrHistoryData.TargetBranch |
+                                Status: <strong class="text-uppercase text-dark">@PrHistoryData.Status</strong>
+                            </small>
+                        </div>
+                        <div class="text-end">
+                            <span class="badge bg-secondary font-monospace">@PrHistoryData.RepositoryName</span>
+                        </div>
+                    </div>
+
+                    <div class="row g-2 text-center">
+                        <div class="col-6 col-md-2">
+                            <div class="p-2 rounded bg-light border">
+                                <small class="text-muted d-block">🚀 Pushes / Iterations</small>
+                                <span class="fw-bold fs-5 text-primary">@PrHistoryData.TotalIterations</span>
+                            </div>
+                        </div>
+                        <div class="col-6 col-md-2">
+                            <div class="p-2 rounded bg-light border">
+                                <small class="text-muted d-block">💬 Total Threads</small>
+                                <span class="fw-bold fs-5 text-dark">@PrHistoryData.TotalThreads</span>
+                            </div>
+                        </div>
+                        <div class="col-6 col-md-2">
+                            <div class="p-2 rounded bg-light border">
+                                <small class="text-muted d-block">🔴 Active</small>
+                                <span class="fw-bold fs-5 text-danger">@PrHistoryData.ActiveThreads</span>
+                            </div>
+                        </div>
+                        <div class="col-6 col-md-2">
+                            <div class="p-2 rounded bg-light border">
+                                <small class="text-muted d-block">🟢 Resolved</small>
+                                <span class="fw-bold fs-5 text-success">@PrHistoryData.ResolvedThreads</span>
+                            </div>
+                        </div>
+                        <div class="col-6 col-md-2">
+                            <div class="p-2 rounded bg-light border">
+                                <small class="text-muted d-block">🟣 Won't Fix</small>
+                                <span class="fw-bold fs-5 text-warning">@PrHistoryData.WontFixThreads</span>
+                            </div>
+                        </div>
+                        <div class="col-6 col-md-2">
+                            <div class="p-2 rounded bg-light border">
+                                <small class="text-muted d-block">📝 Total Comments</small>
+                                <span class="fw-bold fs-5 text-info">@PrHistoryData.TotalComments</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Live Filters Bar -->
+                <div class="card p-2 mb-3 bg-light border-0 shadow-sm">
+                    <div class="row g-2 align-items-center">
+                        <div class="col-md-5">
+                            <div class="input-group input-group-sm">
+                                <span class="input-group-text bg-white">🔍</span>
+                                <input type="text" class="form-control" placeholder="Search comments, author, files, or commit SHAs..."
+                                       @bind="FilterSearchText" @bind:event="oninput" />
+                            </div>
+                        </div>
+                        <div class="col-md-3">
+                            <select class="form-select form-select-sm" @bind="FilterStatus">
+                                <option value="all">All Statuses (Active, Resolved, etc.)</option>
+                                <option value="active">Active (Unresolved) Only</option>
+                                <option value="resolved">Fixed / Resolved Only</option>
+                                <option value="wontfix">Won't Fix Only</option>
+                            </select>
+                        </div>
+                        <div class="col-md-2">
+                            <select class="form-select form-select-sm" @bind="FilterType">
+                                <option value="all">All Timeline Items</option>
+                                <option value="iterations">Git Pushes Only</option>
+                                <option value="inline">Inline Comments Only</option>
+                                <option value="general">General Feed Only</option>
+                            </select>
+                        </div>
+                        <div class="col-md-2 text-end">
+                            <button class="btn btn-sm btn-outline-secondary w-100 fw-bold" @onclick="ToggleSortOrder">
+                                @(SortAscending ? "⬆️ Oldest First" : "⬇️ Newest First")
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Interactive Timeline Activity Feed -->
+                @if (FilteredTimeline.Count == 0)
                 {
-                    <div class="mt-3 pt-3 border-top d-flex gap-2">
-                        <button class="btn btn-primary flex-grow-1 py-2 fw-bold" @onclick="DownloadDiscussionsDirectly">
-                            ⬇️ Download Discussions (.txt)
-                        </button>
-                        <button class="btn btn-success flex-grow-1 py-2 fw-bold" @onclick="ReCopyDiscussionsBundleFile">
-                            📋 Re-copy to Clipboard
-                        </button>
+                    <div class="card p-4 text-center text-muted bg-white border">
+                        <div class="fs-2 mb-1">🔍</div>
+                        <h6>No history or discussions matched your filter criteria.</h6>
+                        <button class="btn btn-link btn-sm text-decoration-none" @onclick="ClearFilters">Clear Filters</button>
                     </div>
                 }
-            </div>
+                else
+                {
+                    <div class="d-flex flex-column gap-3">
+                        @foreach (var item in FilteredTimeline)
+                        {
+                            @if (item.ItemType == "Iteration")
+                            {
+                                <!-- Git Commit Push / Iteration Card -->
+                                <div class="card shadow-sm border-0" style="background: #eff6ff; border-left: 5px solid #3b82f6 !important;">
+                                    <div class="card-body p-3">
+                                        <div class="d-flex justify-content-between align-items-center mb-1">
+                                            <div class="d-flex align-items-center gap-2">
+                                                <span class="badge bg-primary px-2 py-1">🚀 Push Iteration #@item.IterationId</span>
+                                                <span class="small fw-bold text-dark font-monospace">
+                                                    Commit: @(item.CommitId.Length >= 8 ? item.CommitId.Substring(0, 8) : (!string.IsNullOrEmpty(item.CommitId) ? item.CommitId : "—"))
+                                                </span>
+                                            </div>
+                                            <small class="text-muted font-monospace">
+                                                @(item.Timestamp != DateTime.MinValue ? item.Timestamp.ToString("yyyy-MM-dd HH:mm:ss") : "")
+                                            </small>
+                                        </div>
+                                        <div class="small text-secondary">
+                                            @if (!string.IsNullOrWhiteSpace(item.Description))
+                                            {
+                                                <div class="fw-semibold text-dark mb-1">@item.Description</div>
+                                            }
+                                            @if (!string.IsNullOrWhiteSpace(item.CommitComment))
+                                            {
+                                                <div class="font-monospace text-dark bg-white p-2 rounded border small mb-1">
+                                                    💬 @item.CommitComment
+                                                </div>
+                                            }
+                                            <span>
+                                                Pushed by: <strong>@item.AuthorName</strong>
+                                                @if (!string.IsNullOrWhiteSpace(item.Reason))
+                                                {
+                                                    <span class="badge bg-light text-dark border ms-1">@item.Reason</span>
+                                                }
+                                            </span>
+                                        </div>
+                                    </div>
+                                </div>
+                            }
+                            else if (item.ItemType == "Thread")
+                            {
+                                string statusBadgeClass = item.Status == 1 ? "bg-danger" : item.Status == 2 ? "bg-success" : item.Status == 3 ? "bg-warning text-dark" : "bg-secondary";
+                                string borderLeftColor = item.Status == 1 ? "#ef4444" : item.Status == 2 ? "#10b981" : item.Status == 3 ? "#f59e0b" : "#94a3b8";
+
+                                <!-- Discussion Thread Card -->
+                                <div class="card shadow-sm bg-white" style="border: 1px solid #e2e8f0 !important; border-left: 5px solid @borderLeftColor !important;">
+                                    <div class="card-header bg-light py-2 px-3 d-flex flex-wrap justify-content-between align-items-center">
+                                        <div class="d-flex align-items-center gap-2">
+                                            <span class="badge @statusBadgeClass font-monospace">@item.StatusName</span>
+                                            <span class="small fw-bold text-dark">Thread #@item.ThreadId</span>
+                                            @if (item.IsInline)
+                                            {
+                                                <span class="badge bg-light text-dark border font-monospace small">
+                                                    📄 @Path.GetFileName(item.FilePath) : Line @item.Line
+                                                </span>
+                                            }
+                                            else
+                                            {
+                                                <span class="badge bg-light text-secondary border small">📢 General PR Feed</span>
+                                            }
+                                        </div>
+                                        <div class="d-flex align-items-center gap-2">
+                                            @if (item.IsInline && !string.IsNullOrEmpty(item.DeepLink) && item.DeepLink != "#")
+                                            {
+                                                <a href="@item.DeepLink" target="_blank" class="btn btn-outline-primary btn-sm py-0 px-2 small text-decoration-none" title="Open comment in TFS file view">
+                                                    🔗 Open in TFS
+                                                </a>
+                                            }
+                                            <small class="text-muted font-monospace">
+                                                @(item.Timestamp != DateTime.MinValue ? item.Timestamp.ToString("yyyy-MM-dd HH:mm:ss") : "")
+                                            </small>
+                                        </div>
+                                    </div>
+                                    <div class="card-body p-3">
+                                        @{
+                                            var activeComments = item.Comments ?? new();
+                                            var rootComments = activeComments.Where(c => c.ParentCommentId == 0).OrderBy(c => c.Id).ToList();
+                                            var replyComments = activeComments.Where(c => c.ParentCommentId != 0).OrderBy(c => c.Id).ToList();
+                                            if (rootComments.Count == 0 && activeComments.Count > 0)
+                                            {
+                                                rootComments = activeComments;
+                                                replyComments.Clear();
+                                            }
+                                        }
+
+                                        @foreach (var root in rootComments)
+                                        {
+                                            <div class="mb-2">
+                                                <div class="d-flex justify-content-between align-items-center mb-1">
+                                                    <div class="d-flex align-items-center gap-1">
+                                                        <span class="badge bg-secondary-subtle text-dark">👤 @root.AuthorName</span>
+                                                        @if (root.IsSystem)
+                                                        {
+                                                            <span class="badge bg-light text-muted border" style="font-size: 0.65rem;">SYSTEM</span>
+                                                        }
+                                                    </div>
+                                                    <small class="text-muted" style="font-size: 0.75rem;">
+                                                        @(root.PublishedDate?.ToString("yyyy-MM-dd HH:mm:ss") ?? "")
+                                                    </small>
+                                                </div>
+                                                <div class="p-2 rounded bg-light small text-dark font-monospace text-break" style="white-space: pre-wrap; line-height: 1.45;">@root.Content</div>
+                                            </div>
+
+                                            @foreach (var reply in replyComments.Where(r => r.ParentCommentId == root.Id))
+                                            {
+                                                <div class="ms-4 ps-2 border-start border-3 border-primary-subtle mb-2">
+                                                    <div class="d-flex justify-content-between align-items-center mb-1">
+                                                        <span class="badge bg-light text-primary border small">↳ 👤 @reply.AuthorName</span>
+                                                        <small class="text-muted" style="font-size: 0.72rem;">
+                                                            @(reply.PublishedDate?.ToString("yyyy-MM-dd HH:mm:ss") ?? "")
+                                                        </small>
+                                                    </div>
+                                                    <div class="p-2 rounded bg-light-subtle border small text-dark font-monospace text-break" style="white-space: pre-wrap; line-height: 1.45;">@reply.Content</div>
+                                                </div>
+                                            }
+                                        }
+                                    </div>
+                                </div>
+                            }
+                        }
+                    </div>
+                }
+            }
         </div>
     }
+
 </div>
 
 @code {
@@ -330,9 +567,12 @@
     private AiReviewPayload? ParsedReviewPayload;
     private string? LastReflectFilePath;
 
-    private bool IncludeSystemCommentsInExtract = false;
-    private string? LastThreadsFilePath;
-    private string LastThreadsText = "";
+    private bool IncludeSystemCommentsInExtract = true;
+    private PrHistoryResponse? PrHistoryData;
+    private string FilterSearchText = "";
+    private string FilterStatus = "all";
+    private string FilterType = "all";
+    private bool SortAscending = false;
 
     private bool HasPermission(string key)
     {
@@ -478,46 +718,101 @@
         finally { IsProcessing = false; }
     }
 
-    private async Task ExecuteExtractThreadsAsync()
+    private async Task ExecuteLoadHistoryAsync()
     {
         if (string.IsNullOrWhiteSpace(PrInput)) return;
-        LastThreadsFilePath = null;
-        LastThreadsText = "";
         IsProcessing = true;
-        await LogAsync("=== Mode 4: Extracting Discussions ===");
+        await LogAsync("=== Mode 4: Loading PR History, Pushes & Discussions ===");
 
         try
         {
-            var resp = await Http.PostAsJsonAsync("api/tfsbridge/extract-threads", new ExtractThreadsRequest
+            var resp = await Http.PostAsJsonAsync("api/tfsbridge/pr-history", new ExtractThreadsRequest
             {
                 PrInput = PrInput, PatToken = PatToken, IncludeSystemComments = IncludeSystemCommentsInExtract
             });
 
-            var result = await resp.Content.ReadFromJsonAsync<OperationResponse<ExtractThreadsResult>>();
+            var result = await resp.Content.ReadFromJsonAsync<OperationResponse<PrHistoryResponse>>();
             if (result?.Logs != null) foreach (var l in result.Logs) await LogAsync(l);
             if (result?.Success == true && result.Data != null)
             {
-                LastThreadsFilePath = result.Data.SavedFilePath;
-                LastThreadsText = result.Data.ThreadsText;
-                await JS.InvokeAsync<bool>("copyTextToClipboard", LastThreadsText);
-                await LogAsync("✔ Discussions copied to clipboard! (Ready to paste)");
+                PrHistoryData = result.Data;
+                await LogAsync($"✔ Loaded {PrHistoryData.TotalIterations} push iteration(s) and {PrHistoryData.TotalThreads} discussion thread(s).");
+            }
+            else if (!string.IsNullOrEmpty(result?.Error))
+            {
+                await LogAsync($"❌ {result.Error}");
             }
         }
-        catch (Exception ex) { await LogAsync($"❌ Extraction failed: {ex.Message}"); }
+        catch (Exception ex) { await LogAsync($"❌ Failed to load PR history: {ex.Message}"); }
         finally { IsProcessing = false; }
+    }
+
+    private List<PrHistoryItemDto> FilteredTimeline
+    {
+        get
+        {
+            if (PrHistoryData?.Timeline == null) return new();
+            var list = PrHistoryData.Timeline.AsEnumerable();
+
+            if (FilterType == "iterations") list = list.Where(i => i.ItemType == "Iteration");
+            else if (FilterType == "inline") list = list.Where(i => i.ItemType == "Thread" && i.IsInline);
+            else if (FilterType == "general") list = list.Where(i => i.ItemType == "Thread" && !i.IsInline);
+
+            if (FilterStatus == "active") list = list.Where(i => i.ItemType == "Iteration" || i.Status == 1);
+            else if (FilterStatus == "resolved") list = list.Where(i => i.ItemType == "Iteration" || i.Status == 2);
+            else if (FilterStatus == "wontfix") list = list.Where(i => i.ItemType == "Iteration" || i.Status == 3);
+
+            if (!string.IsNullOrWhiteSpace(FilterSearchText))
+            {
+                string q = FilterSearchText.Trim();
+                list = list.Where(i =>
+                {
+                    if (i.ItemType == "Iteration")
+                    {
+                        return (i.CommitId.Contains(q, StringComparison.OrdinalIgnoreCase)) ||
+                               (i.CommitComment.Contains(q, StringComparison.OrdinalIgnoreCase)) ||
+                               (i.AuthorName.Contains(q, StringComparison.OrdinalIgnoreCase)) ||
+                               (i.Description.Contains(q, StringComparison.OrdinalIgnoreCase));
+                    }
+                    if (i.ItemType == "Thread")
+                    {
+                        bool fileMatch = i.FilePath.Contains(q, StringComparison.OrdinalIgnoreCase);
+                        bool commentMatch = i.Comments.Any(c => 
+                            c.Content.Contains(q, StringComparison.OrdinalIgnoreCase) ||
+                            c.AuthorName.Contains(q, StringComparison.OrdinalIgnoreCase));
+                        return fileMatch || commentMatch;
+                    }
+                    return false;
+                });
+            }
+
+            return SortAscending
+                ? list.OrderBy(i => i.Timestamp).ToList()
+                : list.OrderByDescending(i => i.Timestamp).ToList();
+        }
+    }
+
+    private void ToggleSortOrder() => SortAscending = !SortAscending;
+
+    private void ClearFilters()
+    {
+        FilterSearchText = "";
+        FilterStatus = "all";
+        FilterType = "all";
     }
 
     private async Task DownloadDiscussionsDirectly()
     {
-        if (string.IsNullOrEmpty(LastThreadsFilePath) || string.IsNullOrEmpty(LastThreadsText)) return;
-        await JS.InvokeVoidAsync("saveFileLocally", Path.GetFileName(LastThreadsFilePath), LastThreadsText);
-        await LogAsync("✔ Downloaded discussions file to local machine.");
+        if (PrHistoryData == null || string.IsNullOrEmpty(PrHistoryData.ThreadsText)) return;
+        string fileName = !string.IsNullOrEmpty(PrHistoryData.SavedFilePath) ? Path.GetFileName(PrHistoryData.SavedFilePath) : "PR_Discussions.txt";
+        await JS.InvokeVoidAsync("saveFileLocally", fileName, PrHistoryData.ThreadsText);
+        await LogAsync($"✔ Downloaded discussions file to local machine: {fileName}");
     }
 
     private async Task ReCopyDiscussionsBundleFile()
     {
-        if (string.IsNullOrEmpty(LastThreadsText)) return;
-        await JS.InvokeAsync<bool>("copyTextToClipboard", LastThreadsText);
+        if (PrHistoryData == null || string.IsNullOrEmpty(PrHistoryData.ThreadsText)) return;
+        await JS.InvokeAsync<bool>("copyTextToClipboard", PrHistoryData.ThreadsText);
         await LogAsync("✔ Discussions file re-copied to clipboard!");
     }
 }

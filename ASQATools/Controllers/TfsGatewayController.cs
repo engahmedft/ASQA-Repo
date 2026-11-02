@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.DataProtection;
+using System.IO.Compression;
 using System.Net;
 using ASQATools.Shared.Models;
 using ASQATools.Services;
@@ -43,6 +44,101 @@ public class TfsGatewayController : ControllerBase
         _credentials = credentials;
         _config = config;
         _protector = provider.CreateProtector("Tfs.Domain.Credentials.v1");
+    }
+
+    [HttpPost("pr-history")]
+    public async Task<IActionResult> GetPrHistory([FromBody] ExtractThreadsRequest req)
+    {
+        string username = User.Identity?.Name ?? "";
+        if (!_rbac.HasPermission(username, RbacSecurityService.PermPrExtractDiscussions) && !_rbac.IsAdmin(username))
+        {
+            return Forbid();
+        }
+
+        var logs = new List<string>();
+        Action<string> logger = msg => logs.Add(msg);
+        _engine.OnLog += logger;
+        try
+        {
+            var creds = _credentials.GetCredentials();
+            var response = await _engine.GetPrHistoryAsync(req.PrInput, creds, req.PatToken, req.IncludeSystemComments);
+            return Ok(new OperationResponse<PrHistoryResponse>
+            {
+                Success = true,
+                Data = response,
+                Logs = logs
+            });
+        }
+        catch (Exception ex)
+        {
+            logs.Add($"❌ {ex.Message}");
+            return Ok(new OperationResponse<PrHistoryResponse> { Success = false, Error = ex.Message, Logs = logs });
+        }
+        finally { _engine.OnLog -= logger; }
+    }
+
+    [HttpGet("agent/download-zip")]
+    public IActionResult DownloadAgentZip([FromQuery] string? sourcePath = null)
+    {
+        string prebuiltZip = Path.Combine(AppContext.BaseDirectory, "wwwroot", "downloads", "ASQA_LocalAgent.zip");
+        if (System.IO.File.Exists(prebuiltZip))
+        {
+            return File(System.IO.File.ReadAllBytes(prebuiltZip), "application/zip", "ASQA_LocalAgent.zip");
+        }
+
+        string agentDir = !string.IsNullOrWhiteSpace(sourcePath) && Directory.Exists(sourcePath)
+            ? sourcePath
+            : Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "ASQATools.LocalBridge", "bin", "Release", "net10.0"));
+
+        if (!Directory.Exists(agentDir))
+            agentDir = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "LocalBridge"));
+
+        if (!Directory.Exists(agentDir))
+            agentDir = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "ASQATools.LocalBridge"));
+
+        if (!Directory.Exists(agentDir))
+            return NotFound("Agent source files not found on server.");
+
+        using var memoryStream = new MemoryStream();
+        ZipFile.CreateFromDirectory(agentDir, memoryStream, CompressionLevel.Fastest, includeBaseDirectory: false);
+        return File(memoryStream.ToArray(), "application/zip", "ASQA_LocalAgent.zip");
+    }
+
+    [HttpPost("agent/build-zip")]
+    public IActionResult BuildAgentZip([FromBody] BuildAgentZipRequest req)
+    {
+        string sourceDir = !string.IsNullOrWhiteSpace(req.SourceFolderPath) && Directory.Exists(req.SourceFolderPath)
+            ? req.SourceFolderPath
+            : Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "ASQATools.LocalBridge"));
+
+        if (!Directory.Exists(sourceDir))
+            return BadRequest($"Source directory '{sourceDir}' does not exist on server.");
+
+        string outputDir = Path.Combine(AppContext.BaseDirectory, "wwwroot", "downloads");
+        Directory.CreateDirectory(outputDir);
+        string outputZipName = string.IsNullOrWhiteSpace(req.OutputZipName) ? "ASQA_LocalAgent.zip" : req.OutputZipName;
+        string targetZipPath = Path.Combine(outputDir, outputZipName);
+
+        if (System.IO.File.Exists(targetZipPath))
+        {
+            System.IO.File.Delete(targetZipPath);
+        }
+
+        ZipFile.CreateFromDirectory(sourceDir, targetZipPath, CompressionLevel.Optimal, includeBaseDirectory: false);
+        var fileInfo = new FileInfo(targetZipPath);
+
+        return Ok(new OperationResponse<string>
+        {
+            Success = true,
+            Data = targetZipPath,
+            Logs = new List<string>
+            {
+                $"✔ Packaged ZIP created successfully: {outputZipName}",
+                $"  * Source Directory: {sourceDir}",
+                $"  * File Size: {(fileInfo.Length / 1024):N0} KB",
+                $"  * Public Download URL: downloads/{outputZipName}"
+            }
+        });
     }
 
     [AllowAnonymous]

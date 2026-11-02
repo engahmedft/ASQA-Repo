@@ -1,0 +1,153 @@
+@using ASQATools.Client.Services
+@inject ClientBridgeService BridgeService
+
+@if (Show)
+{
+    <div class="modal fade show d-block" style="background: rgba(0,0,0,0.55);" tabindex="-1">
+        <div class="modal-dialog modal-dialog-centered modal-lg">
+            <div class="modal-content shadow border-0">
+                <div class="modal-header border-bottom py-3">
+                    <div class="d-flex align-items-center gap-2">
+                        <span class="fs-5">🖥️</span>
+                        <h5 class="modal-title fw-bold text-dark mb-0">ASQA Desktop Bridge Manager</h5>
+                    </div>
+                    <button type="button" class="btn-close" @onclick="OnClose"></button>
+                </div>
+                <div class="modal-body p-4">
+                    <!-- Status Banner -->
+                    <div class="card p-3 mb-3 border-0 @(BridgeService.IsConnected ? "bg-success-subtle text-success-emphasis" : "bg-light text-secondary")">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <div class="d-flex align-items-center gap-2">
+                                <span class="fs-4">@(BridgeService.IsConnected ? "🟢" : "⚪")</span>
+                                <div>
+                                    <h6 class="fw-bold mb-0">@(BridgeService.IsConnected ? $"Desktop Bridge Connected (Port {BridgeService.CurrentPort})" : "Desktop Bridge Offline")</h6>
+                                    <small>@(BridgeService.IsConnected ? "Live connection established with client workstation" : "No active agent detected on localhost ports 5173–5185")</small>
+                                </div>
+                            </div>
+                            <div class="d-flex gap-2">
+                                @if (BridgeService.IsConnected)
+                                {
+                                    <button class="btn btn-sm btn-outline-danger fw-bold" @onclick="BridgeService.StopAgentAsync" title="Shut down the local agent process">
+                                        🛑 Stop Agent
+                                    </button>
+                                    <button class="btn btn-sm btn-outline-secondary" @onclick="BridgeService.Disconnect">
+                                        Disconnect
+                                    </button>
+                                }
+                                else
+                                {
+                                    <button class="btn btn-sm btn-primary fw-bold" @onclick="() => BridgeService.ConnectAsync()" disabled="@BridgeService.IsConnecting">
+                                        @(BridgeService.IsConnecting ? "Connecting..." : "⚡ Connect to Agent")
+                                    </button>
+                                }
+                            </div>
+                        </div>
+                    </div>
+
+                    @if (BridgeService.ConnectedAgent != null)
+                    {
+                        <!-- Telemetry Grid -->
+                        <div class="card p-3 mb-3 bg-white border">
+                            <h6 class="fw-bold small text-uppercase text-secondary mb-3">Workstation Telemetry</h6>
+                            <div class="row g-3 font-monospace small">
+                                <div class="col-md-6">
+                                    <div class="p-2 rounded bg-light border">
+                                        <span class="text-secondary d-block">Workstation / Host:</span>
+                                        <strong class="text-dark">@BridgeService.ConnectedAgent.MachineName</strong>
+                                    </div>
+                                </div>
+                                <div class="col-md-6">
+                                    <div class="p-2 rounded bg-light border">
+                                        <span class="text-secondary d-block">Logged User:</span>
+                                        <strong class="text-dark">@BridgeService.ConnectedAgent.UserName</strong>
+                                    </div>
+                                </div>
+                                <div class="col-md-6">
+                                    <div class="p-2 rounded bg-light border">
+                                        <span class="text-secondary d-block">Operating System:</span>
+                                        <span class="text-dark">@BridgeService.ConnectedAgent.OsVersion</span>
+                                    </div>
+                                </div>
+                                <div class="col-md-6">
+                                    <div class="p-2 rounded bg-light border">
+                                        <span class="text-secondary d-block">.NET Runtime Version:</span>
+                                        <span class="text-dark">@BridgeService.ConnectedAgent.DotnetVersion</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    }
+
+                    <!-- Download Cards with Icons -->
+                    <div class="card p-3 bg-light border-0 rounded-3 mb-2">
+                        <h6 class="fw-bold mb-3 text-dark small text-uppercase d-flex align-items-center gap-2">
+                            <span>📥</span> Client Agent Packages & Fallbacks
+                        </h6>
+                        <div class="row g-3">
+                            <!-- 1. Full Standalone Bundle (Zero-setup fallback) -->
+                            <div class="col-md-6">
+                                <div class="card h-100 p-3 bg-white border shadow-sm d-flex flex-column justify-content-between">
+                                    <div>
+                                        <div class="d-flex align-items-center gap-2 mb-1">
+                                            <span class="fs-4">🛡️</span>
+                                            <div>
+                                                <strong class="text-dark d-block">Full Portable Bundle</strong>
+                                                <span class="badge bg-success-subtle text-success border border-success-subtle" style="font-size: 0.65rem;">Zero-Install • Recommended</span>
+                                            </div>
+                                        </div>
+                                        <p class="small text-muted mb-3" style="font-size: 0.78rem;">
+                                            Includes bundled portable .NET runner. Runs on any Windows PC even if .NET is missing or blocked by IT policy.
+                                        </p>
+                                    </div>
+                                    <a href="downloads/ASQA_LocalAgent_Full.zip" download class="btn btn-sm btn-primary fw-bold w-100 d-flex align-items-center justify-content-center gap-1 shadow-sm">
+                                        <span>⬇️</span> Download Full Bundle (~60 MB)
+                                    </a>
+                                </div>
+                            </div>
+
+                            <!-- 2. Lightweight Package (For machines with .NET) -->
+                            <div class="col-md-6">
+                                <div class="card h-100 p-3 bg-white border shadow-sm d-flex flex-column justify-content-between">
+                                    <div>
+                                        <div class="d-flex align-items-center gap-2 mb-1">
+                                            <span class="fs-4">⚡</span>
+                                            <div>
+                                                <strong class="text-dark d-block">Lightweight Package</strong>
+                                                <span class="badge bg-secondary-subtle text-secondary" style="font-size: 0.65rem;">Fast • Requires .NET</span>
+                                            </div>
+                                        </div>
+                                        <p class="small text-muted mb-3" style="font-size: 0.78rem;">
+                                            Compact package for developers who already have the .NET runtime in their system PATH.
+                                        </p>
+                                    </div>
+                                    <a href="downloads/ASQA_LocalAgent.zip" download class="btn btn-sm btn-outline-secondary fw-bold w-100 d-flex align-items-center justify-content-center gap-1">
+                                        <span>⬇️</span> Download Light Agent (~3 MB)
+                                    </a>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 2-Step Launch Instructions -->
+                        <div class="mt-3 pt-2 border-top">
+                            <small class="text-muted d-block fw-semibold mb-1">🚀 Quick Launch:</small>
+                            <div class="small text-secondary font-monospace bg-white p-2 rounded border" style="font-size: 0.76rem;">
+                                1. Unzip to any local directory (e.g. <code>C:\Tools\ASQA_Agent\</code>)<br />
+                                2. Double-click <code>start-agent.sh</code> (runs via Git Bash)
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public bool Show { get; set; }
+    [Parameter] public EventCallback OnClose { get; set; }
+
+    protected override void OnInitialized()
+    {
+        BridgeService.OnChange += StateHasChanged;
+    }
+}

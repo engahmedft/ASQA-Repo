@@ -10,6 +10,78 @@ public class DomainLoginRequest
     public string Password { get; set; } = string.Empty;
 }
 
+public class ClientAgentInfoDto
+{
+    public string Service { get; set; } = string.Empty;
+    public string Status { get; set; } = string.Empty;
+    public string MachineName { get; set; } = string.Empty;
+    public string UserName { get; set; } = string.Empty;
+    public string OsVersion { get; set; } = string.Empty;
+    public string DotnetVersion { get; set; } = string.Empty;
+    public int Port { get; set; }
+    public DateTime Timestamp { get; set; }
+}
+
+public class BuildAgentZipRequest
+{
+    public string? SourceFolderPath { get; set; }
+    public string? OutputZipName { get; set; } = "ASQA_LocalAgent.zip";
+}
+
+public class PrHistoryCommentDto
+{
+    public int Id { get; set; }
+    public int ParentCommentId { get; set; }
+    public string AuthorName { get; set; } = string.Empty;
+    public string Content { get; set; } = string.Empty;
+    public DateTime? PublishedDate { get; set; }
+    public bool IsSystem { get; set; }
+}
+
+public class PrHistoryItemDto
+{
+    public string ItemType { get; set; } = "Thread";
+    public DateTime Timestamp { get; set; } = DateTime.MinValue;
+    public int IterationId { get; set; }
+    public string CommitId { get; set; } = string.Empty;
+    public string AuthorName { get; set; } = string.Empty;
+    public string Description { get; set; } = string.Empty;
+    public string CommitComment { get; set; } = string.Empty;
+    public string Reason { get; set; } = string.Empty;
+    public int ThreadId { get; set; }
+    public int Status { get; set; }
+    public string StatusName { get; set; } = string.Empty;
+    public bool IsInline { get; set; }
+    public string FilePath { get; set; } = string.Empty;
+    public int Line { get; set; }
+    public string DeepLink { get; set; } = string.Empty;
+    public List<PrHistoryCommentDto> Comments { get; set; } = new();
+}
+
+public class PrHistoryResponse
+{
+    public int PullRequestId { get; set; }
+    public string Title { get; set; } = string.Empty;
+    public string Author { get; set; } = string.Empty;
+    public string SourceBranch { get; set; } = string.Empty;
+    public string TargetBranch { get; set; } = string.Empty;
+    public string Status { get; set; } = string.Empty;
+    public string RepositoryName { get; set; } = string.Empty;
+    public string ServerUrl { get; set; } = string.Empty;
+    public string Collection { get; set; } = string.Empty;
+    public string Project { get; set; } = string.Empty;
+    public int TotalIterations { get; set; }
+    public int TotalThreads { get; set; }
+    public int ActiveThreads { get; set; }
+    public int ResolvedThreads { get; set; }
+    public int WontFixThreads { get; set; }
+    public int ClosedThreads { get; set; }
+    public int TotalComments { get; set; }
+    public List<PrHistoryItemDto> Timeline { get; set; } = new();
+    public string ThreadsText { get; set; } = string.Empty;
+    public string SavedFilePath { get; set; } = string.Empty;
+}
+
 public class AuthStatusResponse
 {
     public bool IsAuthenticated { get; set; }
@@ -100,7 +172,7 @@ public class ExtractThreadsRequest
 {
     public string PrInput { get; set; } = string.Empty;
     public string PatToken { get; set; } = string.Empty;
-    public bool IncludeSystemComments { get; set; } = false;
+    public bool IncludeSystemComments { get; set; } = true;
 }
 
 public class ExtractThreadsResult
@@ -289,6 +361,7 @@ public class TfsProject
 public class TfsCommitRef
 {
     public string CommitId { get; set; } = string.Empty;
+    public string? Comment { get; set; }
 }
 
 public class TfsThread
@@ -370,9 +443,14 @@ public class TfsItem
 public class TfsIteration
 {
     public int Id { get; set; }
+    public string? Description { get; set; }
+    public TfsIdentity? Author { get; set; }
+    public DateTime? CreatedDate { get; set; }
+    public DateTime? UpdatedDate { get; set; }
     public TfsCommitRef? SourceRefCommit { get; set; }
     public TfsCommitRef? TargetRefCommit { get; set; }
     public TfsCommitRef? CommonRefCommit { get; set; }
+    public string? Reason { get; set; }
 }
 
 public class PrExportBundleResult
