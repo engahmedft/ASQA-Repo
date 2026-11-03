@@ -597,7 +597,11 @@
         if (string.IsNullOrWhiteSpace(text)) return;
         try
         {
-            ParsedReviewPayload = JsonSerializer.Deserialize<AiReviewPayload>(text.Trim('`', ' '), new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+            string cleaned = text.Trim();
+            if (cleaned.StartsWith("```json", StringComparison.OrdinalIgnoreCase)) cleaned = cleaned.Substring(7);
+            else if (cleaned.StartsWith("```")) cleaned = cleaned.Substring(3);
+            if (cleaned.EndsWith("```")) cleaned = cleaned.Substring(0, cleaned.Length - 3);
+            ParsedReviewPayload = JsonSerializer.Deserialize<AiReviewPayload>(cleaned.Trim(), new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
         }
         catch { }
     }
@@ -687,6 +691,10 @@
             {
                 LastReflectFilePath = result.Data.SavedFilePath;
                 await LogAsync("✔ Review pipeline applied successfully to TFS.");
+                if (!string.IsNullOrWhiteSpace(result.Data.PrWebUrl))
+                {
+                    await JS.InvokeVoidAsync("openUrlInNewTab", result.Data.PrWebUrl);
+                }
             }
         }
         catch (Exception ex) { await LogAsync($"❌ Reflect failed: {ex.Message}"); }
@@ -712,7 +720,14 @@
             var resp = await Http.PostAsJsonAsync("api/tfsbridge/clear-review", new ClearReviewRequest { PrInput = PrInput, PatToken = PatToken });
             var result = await resp.Content.ReadFromJsonAsync<OperationResponse<string>>();
             if (result?.Logs != null) foreach (var l in result.Logs) await LogAsync(l);
-            if (result?.Success == true) await LogAsync("✔ PR discussion feed and automated review comments cleared.");
+            if (result?.Success == true)
+            {
+                await LogAsync("✔ PR discussion feed and automated review comments cleared.");
+                if (!string.IsNullOrWhiteSpace(result.Data) && result.Data.StartsWith("http", StringComparison.OrdinalIgnoreCase))
+                {
+                    await JS.InvokeVoidAsync("openUrlInNewTab", result.Data);
+                }
+            }
         }
         catch (Exception ex) { await LogAsync($"❌ Clear failed: {ex.Message}"); }
         finally { IsProcessing = false; }

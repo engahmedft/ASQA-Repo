@@ -153,6 +153,16 @@ public class RbacSecurityService
             }
             catch
             {
+                try
+                {
+                    if (File.Exists(_storagePath))
+                    {
+                        string backupCorruptPath = $"{_storagePath}.bak_{DateTime.UtcNow:yyyyMMddHHmmss}";
+                        File.Copy(_storagePath, backupCorruptPath, overwrite: true);
+                    }
+                }
+                catch { }
+
                 var fallback = CreateDefaultDatabase();
                 SaveDatabaseInternal(fallback);
                 return fallback;

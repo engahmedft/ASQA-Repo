@@ -1,3 +1,4 @@
+using System.Text;
 using ASQATools.Shared.Services;
 using Xunit;
 
@@ -44,5 +45,27 @@ public class FastDiffEngineTests
         Assert.Contains("@@", diff);
         Assert.Contains("- L", diff);
         Assert.Contains("+ L", diff);
+    }
+
+    [Fact]
+    public void GenerateUnifiedDiffWithLineNumbers_ShouldHandleLargeFilesOver1500Lines_WithPrefixSuffixTrimming()
+    {
+        var oldSb = new StringBuilder();
+        var newSb = new StringBuilder();
+
+        for (int i = 1; i <= 2500; i++)
+        {
+            oldSb.AppendLine($"public void Method_{i}() {{ int x = {i}; }}");
+            if (i == 1250)
+                newSb.AppendLine($"public void Method_{i}() {{ int x = {i * 10}; }}");
+            else
+                newSb.AppendLine($"public void Method_{i}() {{ int x = {i}; }}");
+        }
+
+        string diff = FastDiffEngine.GenerateUnifiedDiffWithLineNumbers(oldSb.ToString(), newSb.ToString(), contextLines: 2);
+
+        Assert.DoesNotContain("FILE TOO LARGE", diff);
+        Assert.Contains("- L 1250 | public void Method_1250() { int x = 1250; }", diff);
+        Assert.Contains("+ L 1250 | public void Method_1250() { int x = 12500; }", diff);
     }
 }

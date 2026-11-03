@@ -20,6 +20,7 @@ Before emitting your final response, verify and self-correct your JSON payload a
 MANDATORY JSON RESPONSE SCHEMA (MUST STRICTLY FOLLOW):
 ```json
 {{STRICT_JSON_SCHEMA}}
+```
 The "metadata" object MUST be populated with:
 {
 "pr_id": "{{PR_ID}}",
@@ -91,7 +92,7 @@ Always write 'PR 1630', 'Thread 6321', 'Item 1234' without the '#' symbol.
 STRICT TAG WHITELIST (ONLY USE THESE 6 TAGS):
 [NEW CRITICAL], [NEW MEDIUM], [NEW LOW], [PRE-EXISTING CRITICAL], [PRE-EXISTING MEDIUM], [PRE-EXISTING LOW]
 CRITICAL TFS DEEP-LINK ENFORCEMENT:
-Every link in your Findings Summary Table MUST use this EXACT prefix:
+Every link in your Findings Summary Table MUST use this EXACT prefix (Example: {{DEEP_LINK_EXAMPLE}}):
 {{SERVER_URL}}/{{COLLECTION}}/{{PROJECT}}/_git/{{REPOSITORY}}/pullrequest/{{PR_ID}}?_a=files&path=<UrlEncodedFilePath>&line=<line>&lineEnd=<line>&lineStartColumn=1&lineEndColumn=1
 ================================================================================
 ACTIVE UNRESOLVED THREADS (MUST BE VERIFIED - RESOLVED vs STILL_BROKEN):

@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.DataProtection;
 using System.IO.Compression;
 using System.Net;
 using ASQATools.Shared.Models;
+using ASQATools.Shared.Services;
 using ASQATools.Services;
 using System.Security.Claims;
 using Microsoft.AspNetCore.Authentication;
@@ -21,6 +22,7 @@ public class TfsGatewayController : ControllerBase
     private readonly PrReviewEngineService _engine;
     private readonly CodebaseExporterService _exporter;
     private readonly CodeReflectorService _reflector;
+    private readonly ReportExporterService _reportExporter;
     private readonly RbacSecurityService _rbac;
     private readonly DomainCredentialProvider _credentials;
     private readonly IConfiguration _config;
@@ -31,6 +33,7 @@ public class TfsGatewayController : ControllerBase
         PrReviewEngineService engine,
         CodebaseExporterService exporter,
         CodeReflectorService reflector,
+        ReportExporterService reportExporter,
         RbacSecurityService rbac,
         DomainCredentialProvider credentials,
         IConfiguration config,
@@ -40,6 +43,7 @@ public class TfsGatewayController : ControllerBase
         _engine = engine;
         _exporter = exporter;
         _reflector = reflector;
+        _reportExporter = reportExporter;
         _rbac = rbac;
         _credentials = credentials;
         _config = config;
@@ -78,7 +82,7 @@ public class TfsGatewayController : ControllerBase
     }
 
     [HttpGet("agent/download-zip")]
-    public IActionResult DownloadAgentZip([FromQuery] string? sourcePath = null)
+    public IActionResult DownloadAgentZip()
     {
         string prebuiltZip = Path.Combine(AppContext.BaseDirectory, "wwwroot", "downloads", "ASQA_LocalAgent.zip");
         if (System.IO.File.Exists(prebuiltZip))
@@ -86,9 +90,7 @@ public class TfsGatewayController : ControllerBase
             return File(System.IO.File.ReadAllBytes(prebuiltZip), "application/zip", "ASQA_LocalAgent.zip");
         }
 
-        string agentDir = !string.IsNullOrWhiteSpace(sourcePath) && Directory.Exists(sourcePath)
-            ? sourcePath
-            : Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "ASQATools.LocalBridge", "bin", "Release", "net10.0"));
+        string agentDir = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "ASQATools.LocalBridge", "bin", "Release", "net10.0"));
 
         if (!Directory.Exists(agentDir))
             agentDir = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "LocalBridge"));
@@ -107,8 +109,11 @@ public class TfsGatewayController : ControllerBase
     [HttpPost("agent/build-zip")]
     public IActionResult BuildAgentZip([FromBody] BuildAgentZipRequest req)
     {
+        string username = User.Identity?.Name ?? "";
+        if (!_rbac.IsAdmin(username)) return Forbid();
+
         string sourceDir = !string.IsNullOrWhiteSpace(req.SourceFolderPath) && Directory.Exists(req.SourceFolderPath)
-            ? req.SourceFolderPath
+            ? Path.GetFullPath(req.SourceFolderPath)
             : Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "ASQATools.LocalBridge"));
 
         if (!Directory.Exists(sourceDir))
@@ -116,8 +121,11 @@ public class TfsGatewayController : ControllerBase
 
         string outputDir = Path.Combine(AppContext.BaseDirectory, "wwwroot", "downloads");
         Directory.CreateDirectory(outputDir);
-        string outputZipName = string.IsNullOrWhiteSpace(req.OutputZipName) ? "ASQA_LocalAgent.zip" : req.OutputZipName;
-        string targetZipPath = Path.Combine(outputDir, outputZipName);
+        string rawZipName = string.IsNullOrWhiteSpace(req.OutputZipName) ? "ASQA_LocalAgent.zip" : Path.GetFileName(req.OutputZipName);
+        if (string.IsNullOrWhiteSpace(rawZipName) || !rawZipName.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
+            rawZipName = "ASQA_LocalAgent.zip";
+
+        string targetZipPath = Path.Combine(outputDir, rawZipName);
 
         if (System.IO.File.Exists(targetZipPath))
         {
@@ -133,10 +141,10 @@ public class TfsGatewayController : ControllerBase
             Data = targetZipPath,
             Logs = new List<string>
             {
-                $"✔ Packaged ZIP created successfully: {outputZipName}",
+                $"✔ Packaged ZIP created successfully: {rawZipName}",
                 $"  * Source Directory: {sourceDir}",
                 $"  * File Size: {(fileInfo.Length / 1024):N0} KB",
-                $"  * Public Download URL: downloads/{outputZipName}"
+                $"  * Public Download URL: downloads/{rawZipName}"
             }
         });
     }
@@ -382,11 +390,16 @@ public class TfsGatewayController : ControllerBase
         try
         {
             var creds = _credentials.GetCredentials();
-            var savedPath = await _engine.ReflectReviewAsync(req.ReviewPayloadText, req.ConfirmApproval, creds, req.PatToken, req.FallbackPrInput);
+            var (savedPath, prWebUrl) = await _engine.ReflectReviewAsync(req.ReviewPayloadText, req.ConfirmApproval, creds, req.PatToken, req.FallbackPrInput);
             return Ok(new OperationResponse<ReflectReviewResult>
             {
                 Success = true,
-                Data = new ReflectReviewResult { Message = "Review applied successfully", SavedFilePath = savedPath },
+                Data = new ReflectReviewResult
+                {
+                    Message = "Review applied successfully",
+                    SavedFilePath = savedPath,
+                    PrWebUrl = prWebUrl
+                },
                 Logs = logs
             });
         }
@@ -413,8 +426,8 @@ public class TfsGatewayController : ControllerBase
         try
         {
             var creds = _credentials.GetCredentials();
-            await _engine.ClearReviewAsync(req.PrInput, creds, req.PatToken);
-            return Ok(new OperationResponse<string> { Success = true, Data = "Cleared successfully", Logs = logs });
+            string prWebUrl = await _engine.ClearReviewAsync(req.PrInput, creds, req.PatToken);
+            return Ok(new OperationResponse<string> { Success = true, Data = prWebUrl, Logs = logs });
         }
         catch (Exception ex)
         {
@@ -464,8 +477,15 @@ public class TfsGatewayController : ControllerBase
             return Forbid();
         }
 
-        var items = _exporter.GetDirectoryChildren(req.RootPath, req.SubPath);
-        return Ok(items);
+        try
+        {
+            var items = _exporter.GetDirectoryChildren(req.RootPath, req.SubPath);
+            return Ok(items);
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return BadRequest(ex.Message);
+        }
     }
 
     [HttpPost("purge-backups")]
@@ -477,32 +497,26 @@ public class TfsGatewayController : ControllerBase
             return Forbid();
         }
 
-        string targetDir = string.IsNullOrWhiteSpace(req.RootPath) ? Directory.GetCurrentDirectory() : req.RootPath;
-        if (!Directory.Exists(targetDir)) return BadRequest("Directory not found.");
-
-        int deletedCount = 0;
+        var logs = new List<string>();
+        Action<string> logger = msg => logs.Add(msg);
+        _exporter.OnLog += logger;
         try
         {
-            var bakFiles = Directory.EnumerateFiles(targetDir, "*.bak", SearchOption.AllDirectories).ToList();
-            foreach (var file in bakFiles)
-            {
-                try
-                {
-                    System.IO.File.Delete(file);
-                    deletedCount++;
-                }
-                catch { }
-            }
+            int deletedCount = _exporter.PurgeBackups(req.RootPath);
             return Ok(new OperationResponse<int>
             {
                 Success = true,
                 Data = deletedCount,
-                Logs = new List<string> { $"🧹 Successfully purged {deletedCount} .bak backup file(s) from {targetDir}." }
+                Logs = logs
             });
         }
         catch (Exception ex)
         {
-            return Ok(new OperationResponse<int> { Success = false, Error = ex.Message });
+            return Ok(new OperationResponse<int> { Success = false, Error = ex.Message, Logs = logs });
+        }
+        finally
+        {
+            _exporter.OnLog -= logger;
         }
     }
 
@@ -567,5 +581,81 @@ public class TfsGatewayController : ControllerBase
             return Ok(new OperationResponse<int> { Success = false, Error = ex.Message, Logs = logs });
         }
         finally { _reflector.OnLog -= logger; }
+    }
+
+    [HttpGet("reports/default-directory")]
+    public IActionResult GetDefaultReportsDirectory()
+    {
+        string defaultFolder = Path.Combine(AppContext.BaseDirectory, "exported_reports", $"Batch_{DateTime.Now:yyyy_MM_dd}");
+        return Ok(new { directory = defaultFolder });
+    }
+
+    [HttpPost("reports/export-batch")]
+    public async Task<IActionResult> ExportReportsBatch([FromBody] ReportExportRequest req, CancellationToken ct)
+    {
+        string username = User.Identity?.Name ?? "";
+        if (!_rbac.HasPermission(username, RbacSecurityService.PermReports) && !_rbac.IsAdmin(username))
+        {
+            return Forbid();
+        }
+
+        var logs = new List<string>();
+        Action<string> logger = msg => logs.Add(msg);
+        _reportExporter.OnLog += logger;
+        try
+        {
+            // Always create a downloadable ZIP when running on the Server so the user can download the folder hierarchy
+            req.CreateZipArchive = true;
+            string defaultReportsRoot = Path.Combine(AppContext.BaseDirectory, "exported_reports");
+            var result = await _reportExporter.ExecuteBatchExportAsync(req, defaultReportsRoot, ct);
+            return Ok(new OperationResponse<ReportExportBatchResult>
+            {
+                Success = true,
+                Data = result,
+                Logs = logs
+            });
+        }
+        catch (Exception ex)
+        {
+            logs.Add($"❌ {ex.Message}");
+            return Ok(new OperationResponse<ReportExportBatchResult>
+            {
+                Success = false,
+                Error = ex.Message,
+                Logs = logs
+            });
+        }
+        finally
+        {
+            _reportExporter.OnLog -= logger;
+        }
+    }
+
+    [HttpGet("reports/download-zip")]
+    public IActionResult DownloadReportsZip([FromQuery] string zipPath)
+    {
+        string username = User.Identity?.Name ?? "";
+        if (!_rbac.HasPermission(username, RbacSecurityService.PermReports) && !_rbac.IsAdmin(username))
+        {
+            return Forbid();
+        }
+
+        if (string.IsNullOrWhiteSpace(zipPath))
+            return BadRequest("ZIP file path must be provided.");
+
+        string allowedRoot = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "exported_reports")) + Path.DirectorySeparatorChar;
+        string fullPath = Path.GetFullPath(zipPath);
+
+        if (!fullPath.StartsWith(allowedRoot, StringComparison.OrdinalIgnoreCase) ||
+            !fullPath.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
+        {
+            return Forbid();
+        }
+
+        if (!System.IO.File.Exists(fullPath))
+            return NotFound("Requested ZIP archive does not exist on server.");
+
+        byte[] bytes = System.IO.File.ReadAllBytes(fullPath);
+        return File(bytes, "application/zip", Path.GetFileName(fullPath));
     }
 }

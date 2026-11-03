@@ -1,0 +1,637 @@
+@using System.Text.Json
+@using Microsoft.AspNetCore.Components.Forms
+@using ASQATools.Shared.Models
+@using ASQATools.Shared.Services
+@using ASQATools.Client.Services
+@inject HttpClient Http
+@inject ClientBridgeService BridgeService
+@inject IJSRuntime JS
+@implements IDisposable
+
+<div class="d-flex flex-wrap justify-content-between align-items-center mb-3 p-2 bg-white rounded border shadow-sm" style="border-color: #cbd5e1 !important;">
+    <div class="d-flex align-items-center gap-2 px-2">
+        <span class="fs-5">📑</span>
+        <div>
+            <h6 class="fw-bold mb-0 text-dark">Parameterized PDF Report Batch Extractor</h6>
+            <small class="text-muted">Compensate <code>{0}</code>, <code>{1}</code>, <code>{2}</code> variables from CSV/TSV rows into URLs &amp; nested subfolder templates</small>
+        </div>
+    </div>
+
+    <div class="d-flex align-items-center gap-2 px-2">
+        @if (BridgeService.IsConnected)
+        {
+            <span class="badge bg-success-subtle text-success border border-success-subtle py-2 px-3 font-monospace">
+                🟢 Target: Local Workstation (@BridgeService.ConnectedAgent?.MachineName :@BridgeService.CurrentPort)
+            </span>
+        }
+        else
+        {
+            <span class="badge bg-warning-subtle text-dark border border-warning-subtle py-2 px-3 font-monospace"
+                  title="Local Desktop Agent is offline. Reports will be saved on the Server and packaged as a ZIP download.">
+                🌐 Target: Server Fallback + ZIP Download
+            </span>
+        }
+    </div>
+</div>
+
+<div class="row g-3 mb-3">
+    <!-- Left Column: Template & Data Input -->
+    <div class="col-lg-6">
+        <div class="card shadow-sm p-3 bg-white h-100 d-flex flex-column justify-content-between" style="border: 1px solid #cbd5e1 !important;">
+            <div>
+                <h6 class="fw-bold mb-3 pb-2 border-bottom text-dark">⚙️ 1. URL &amp; Folder / Filename Templates</h6>
+
+                <div class="mb-3">
+                    <label class="form-label fw-bold text-dark small text-uppercase mb-1">
+                        Template PDF URL (with <code>{0}</code>, <code>{1}</code>, <code>{2}</code>...):
+                    </label>
+                    <input type="text" class="form-control font-monospace"
+                           value="@TemplateUrl"
+                           @oninput="OnTemplateUrlInput"
+                           style="background: #f8fafc; border: 1px solid #cbd5e1; font-size: 0.86rem;"
+                           placeholder="https://reports.internal/api/pdf?region={0}&dept={1}&reportId={2}" />
+                </div>
+
+                <div class="row g-2 mb-3">
+                    <div class="col-md-6">
+                        <label class="form-label fw-bold text-dark small text-uppercase mb-1">Parent Folder Name / Path:</label>
+                        <input type="text" class="form-control font-monospace"
+                               @bind="ParentFolder" @bind:event="oninput"
+                               style="background: #f8fafc; border: 1px solid #cbd5e1; font-size: 0.85rem;"
+                               placeholder="e.g. C:\Reports\Batch_01 or Batch_01" />
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label fw-bold text-dark small text-uppercase mb-1">
+                            Subfolder &amp; File Name Template:
+                        </label>
+                        <input type="text" class="form-control font-monospace"
+                               value="@FilePathTemplate"
+                               @oninput="OnFilePathTemplateInput"
+                               style="background: #f8fafc; border: 1px solid #cbd5e1; font-size: 0.85rem;"
+                               placeholder="subdir_{0}/subdir_{1}/file_{2}" />
+                    </div>
+                    <div class="col-12">
+                        <small class="text-muted" style="font-size: 0.76rem;">
+                            💡 Use <code>/</code> to create nested subfolders (e.g. <code>subdir_{0}/subdir_{1}/file_{2}</code>) and <code>{row}</code> for row number. <code>.pdf</code> is appended automatically.
+                        </small>
+                    </div>
+                </div>
+
+                <!-- Batch Options -->
+                <div class="p-3 rounded mb-3" style="background: #f8fafc; border: 1px solid #e2e8f0;">
+                    <div class="row g-2 align-items-end">
+                        <div class="col-md-4">
+                            <label class="form-label small fw-bold text-secondary mb-1">Value Delimiter:</label>
+                            <select class="form-select form-select-sm" value="@DelimiterMode" @onchange="OnDelimiterChanged">
+                                <option value="auto">Auto-Detect (Tab / Comma)</option>
+                                <option value="comma">Comma Separated (,)</option>
+                                <option value="tab">Tab Separated (\t)</option>
+                                <option value="semicolon">Semicolon (;)</option>
+                            </select>
+                        </div>
+                        <div class="col-md-5">
+                            <label class="form-label small fw-bold text-secondary mb-1">Existing / Duplicate Files:</label>
+                            <select class="form-select form-select-sm" @bind="DuplicateMode">
+                                <option value="overwrite">Overwrite Existing</option>
+                                <option value="skip">Skip Existing (Resume)</option>
+                                <option value="autonumber">Auto-Number: file (1).pdf</option>
+                            </select>
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label small fw-bold text-secondary mb-1">Parallelism:</label>
+                            <input type="number" class="form-control form-control-sm text-center font-monospace"
+                                   min="1" max="10" @bind="MaxConcurrency" />
+                        </div>
+                    </div>
+                    <div class="d-flex justify-content-between align-items-center mt-2 pt-2 border-top">
+                        <div class="form-check form-switch mb-0">
+                            <input class="form-check-input" type="checkbox" id="skipHeaderSwitch"
+                                   checked="@SkipHeaderRow" @onchange="OnSkipHeaderChanged" />
+                            <label class="form-check-label small fw-bold text-dark" for="skipHeaderSwitch" style="cursor: pointer;">
+                                First line is a column header row (skip row 1)
+                            </label>
+                        </div>
+                        <span class="badge bg-secondary-subtle text-dark font-monospace">
+                            Detected: @DetectedDelimiterLabel
+                        </span>
+                    </div>
+                </div>
+
+                <!-- Data Input: Upload or Paste -->
+                <div class="d-flex flex-wrap justify-content-between align-items-center mb-2">
+                    <label class="form-label fw-bold mb-0 text-dark small text-uppercase">
+                        📋 2. Upload CSV/TSV File or Paste Lines:
+                    </label>
+                    <div class="d-flex flex-wrap gap-1">
+                        <label class="btn btn-sm btn-outline-primary py-0 px-2 fw-bold mb-0" style="cursor: pointer;">
+                            📂 Upload File
+                            <InputFile OnChange="OnFileUploadedAsync" accept=".csv,.tsv,.txt" style="display: none;" />
+                        </label>
+                        <button type="button" class="btn btn-sm btn-outline-secondary py-0 px-2 fw-bold" @onclick="PasteFromClipboardAsync">
+                            📋 Paste
+                        </button>
+                        <button type="button" class="btn btn-sm btn-outline-info py-0 px-2 fw-bold" @onclick="LoadSampleData">
+                            🧪 Sample
+                        </button>
+                        @if (!string.IsNullOrWhiteSpace(RawData))
+                        {
+                            <button type="button" class="btn btn-sm btn-outline-danger py-0 px-2 fw-bold" @onclick="ClearData">
+                                ✕ Clear
+                            </button>
+                        }
+                    </div>
+                </div>
+
+                <textarea class="form-control font-monospace mb-3" rows="9"
+                          value="@RawData"
+                          @oninput="OnRawDataInput"
+                          style="background: #f8fafc; font-size: 0.83rem; white-space: pre;"
+                          placeholder="Paste comma-separated or tab-separated values here (one record per line)...&#10;Example:&#10;Riyadh,Motor,POL-1001&#10;Jeddah,Medical,POL-1002"></textarea>
+            </div>
+
+            <button class="btn btn-primary w-100 py-3 fw-bold shadow-sm"
+                    @onclick="ExecuteBatchDownloadAsync"
+                    disabled="@(IsProcessing || ParsedRows.Count == 0 || string.IsNullOrWhiteSpace(TemplateUrl))">
+                @if (IsProcessing)
+                {
+                    <span><span class="spinner-border spinner-border-sm me-2"></span>Downloading &amp; Saving @ParsedRows.Count PDF(s)...</span>
+                }
+                else
+                {
+                    <span>🚀 Compensate URLs &amp; Download All PDFs (@ParsedRows.Count Row@(ParsedRows.Count == 1 ? "" : "s"))</span>
+                }
+            </button>
+        </div>
+    </div>
+
+    <!-- Right Column: Live Dry-Run Preview & Execution Results -->
+    <div class="col-lg-6">
+        <div class="d-flex flex-column gap-3 h-100">
+            <!-- Live Preview Card -->
+            <div class="card shadow-sm p-3 bg-white" style="border: 1px solid #cbd5e1 !important;">
+                <div class="d-flex justify-content-between align-items-center mb-2 pb-2 border-bottom">
+                    <h6 class="fw-bold mb-0 text-dark">🔍 Live Path &amp; URL Compensation Preview</h6>
+                    <span class="badge @(ParsedRows.Count > 0 ? "bg-primary" : "bg-secondary")">
+                        @ParsedRows.Count Valid Row@(ParsedRows.Count == 1 ? "" : "s")
+                    </span>
+                </div>
+
+                @if (ParsedRows.Count == 0)
+                {
+                    <div class="text-center py-4 text-muted">
+                        <div class="fs-2 mb-1">📄</div>
+                        <div class="small">Paste CSV/TSV lines or upload a file on the left to preview resolved URLs and target folder paths.</div>
+                    </div>
+                }
+                else
+                {
+                    <!-- Detected Variables Pill Bar -->
+                    <div class="d-flex flex-wrap gap-1 mb-2">
+                        @for (int colIdx = 0; colIdx < MaxColumnsCount; colIdx++)
+                        {
+                            string headerLabel = colIdx < HeaderColumns.Count && !string.IsNullOrWhiteSpace(HeaderColumns[colIdx])
+                                ? $" ({HeaderColumns[colIdx]})"
+                                : "";
+                            string sampleVal = colIdx < ParsedRows[0].Count ? ParsedRows[0][colIdx] : "";
+                            if (sampleVal.Length > 18) sampleVal = sampleVal.Substring(0, 15) + "...";
+
+                            <span class="badge bg-light text-dark border font-monospace" style="font-size: 0.74rem;">
+                                <strong class="text-primary">{@colIdx}</strong>@headerLabel = "@sampleVal"
+                            </span>
+                        }
+                    </div>
+
+                    <div class="table-responsive" style="max-height: 240px; overflow-y: auto;">
+                        <table class="table table-sm table-bordered align-middle mb-0 font-monospace" style="font-size: 0.76rem;">
+                            <thead class="table-light">
+                                <tr>
+                                    <th style="width: 42px;">#</th>
+                                    <th>Target Subfolder &amp; PDF Name</th>
+                                    <th>Compensated URL</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @for (int i = 0; i < Math.Min(ParsedRows.Count, 5); i++)
+                                {
+                                    var row = ParsedRows[i];
+                                    int rowNum = i + 1;
+                                    string previewRelPath = ReportExporterService.ResolveRelativeFilePath(FilePathTemplate, row, rowNum);
+                                    string previewUrl = ReportExporterService.ResolveUrlTemplate(TemplateUrl, row);
+                                    <tr>
+                                        <td class="text-center fw-bold text-secondary">@rowNum</td>
+                                        <td class="text-break">
+                                            <span class="text-muted">@ParentFolderDisplay/</span><strong class="text-success">@previewRelPath</strong>
+                                        </td>
+                                        <td class="text-break text-primary">
+                                            @(string.IsNullOrWhiteSpace(previewUrl) ? "—" : previewUrl)
+                                        </td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                    @if (ParsedRows.Count > 5)
+                    {
+                        <div class="small text-muted mt-1 text-end" style="font-size: 0.74rem;">
+                            Showing first 5 of @ParsedRows.Count rows
+                        </div>
+                    }
+                }
+            </div>
+
+            <!-- Batch Execution Results Card -->
+            <div class="card shadow-sm p-3 bg-white flex-grow-1 d-flex flex-column justify-content-between" style="border: 1px solid #cbd5e1 !important;">
+                <div>
+                    <div class="d-flex justify-content-between align-items-center mb-3 pb-2 border-bottom">
+                        <h6 class="fw-bold mb-0 text-dark">📊 Batch Execution Telemetry &amp; Output</h6>
+                        @if (LastBatchResult != null)
+                        {
+                            <span class="badge bg-light text-dark border font-monospace">
+                                @((LastBatchResult.TotalBytesDownloaded / 1024.0).ToString("N1")) KB Total
+                            </span>
+                        }
+                    </div>
+
+                    @if (LastBatchResult == null)
+                    {
+                        <div class="text-center py-4 text-muted">
+                            <div class="fs-2 mb-1">📦</div>
+                            <h6 class="mb-1">No Batch Executed Yet</h6>
+                            <p class="small mb-0">Configure your URL &amp; file path template and click <strong>Compensate URLs &amp; Download All PDFs</strong>.</p>
+                        </div>
+                    }
+                    else
+                    {
+                        <!-- Summary Counters -->
+                        <div class="row g-2 mb-3 text-center">
+                            <div class="col-3">
+                                <div class="p-2 rounded border bg-light">
+                                    <small class="text-muted d-block">Total</small>
+                                    <span class="fw-bold fs-5 text-dark">@LastBatchResult.TotalRows</span>
+                                </div>
+                            </div>
+                            <div class="col-3">
+                                <div class="p-2 rounded border bg-success-subtle">
+                                    <small class="text-success-emphasis d-block">Downloaded</small>
+                                    <span class="fw-bold fs-5 text-success">@LastBatchResult.DownloadedCount</span>
+                                </div>
+                            </div>
+                            <div class="col-3">
+                                <div class="p-2 rounded border bg-warning-subtle">
+                                    <small class="text-warning-emphasis d-block">Skipped</small>
+                                    <span class="fw-bold fs-5 text-dark">@LastBatchResult.SkippedCount</span>
+                                </div>
+                            </div>
+                            <div class="col-3">
+                                <div class="p-2 rounded border @(LastBatchResult.FailedCount > 0 ? "bg-danger-subtle" : "bg-light")">
+                                    <small class="text-muted d-block">Failed</small>
+                                    <span class="fw-bold fs-5 @(LastBatchResult.FailedCount > 0 ? "text-danger" : "text-secondary")">@LastBatchResult.FailedCount</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Output Folder & Actions Bar -->
+                        <div class="alert alert-success py-2 px-3 mb-3 d-flex flex-wrap justify-content-between align-items-center gap-2 small">
+                            <div class="text-truncate font-monospace" style="max-width: 65%;" title="@LastBatchResult.OutputDirectory">
+                                📂 Saved in: <strong>@LastBatchResult.OutputDirectory</strong>
+                            </div>
+                            <div class="d-flex gap-1">
+                                @if (BridgeService.IsConnected)
+                                {
+                                    <button class="btn btn-sm btn-success fw-bold py-1 px-2" @onclick="OpenOutputFolderOnWorkstationAsync">
+                                        📂 Open Folder
+                                    </button>
+                                }
+                                @if (!string.IsNullOrWhiteSpace(LastBatchResult.ZipFilePath))
+                                {
+                                    <a href="@($"api/tfsbridge/reports/download-zip?zipPath={Uri.EscapeDataString(LastBatchResult.ZipFilePath)}")"
+                                       download
+                                       class="btn btn-sm btn-primary fw-bold py-1 px-2 text-decoration-none">
+                                        ⬇️ Download ZIP Archive
+                                    </a>
+                                }
+                            </div>
+                        </div>
+
+                        <!-- Filter Pills for Item Results -->
+                        <div class="d-flex justify-content-between align-items-center mb-2">
+                            <div class="btn-group btn-group-sm">
+                                <button class="btn @(ResultFilter == "all" ? "btn-dark" : "btn-outline-secondary")" @onclick='() => ResultFilter = "all"'>
+                                    All (@LastBatchResult.Items.Count)
+                                </button>
+                                <button class="btn @(ResultFilter == "failed" ? "btn-danger" : "btn-outline-danger")" @onclick='() => ResultFilter = "failed"'>
+                                    Failed (@LastBatchResult.FailedCount)
+                                </button>
+                                <button class="btn @(ResultFilter == "downloaded" ? "btn-success" : "btn-outline-success")" @onclick='() => ResultFilter = "downloaded"'>
+                                    Downloaded (@LastBatchResult.DownloadedCount)
+                                </button>
+                            </div>
+                        </div>
+
+                        <div class="table-responsive" style="max-height: 220px; overflow-y: auto;">
+                            <table class="table table-sm table-striped align-middle mb-0 font-monospace" style="font-size: 0.75rem;">
+                                <thead class="table-light">
+                                    <tr>
+                                        <th style="width: 40px;">#</th>
+                                        <th style="width: 90px;">Status</th>
+                                        <th>Relative Path</th>
+                                        <th>Details</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @foreach (var item in FilteredResultItems)
+                                    {
+                                        <tr>
+                                            <td>@item.RowNumber</td>
+                                            <td>
+                                                @if (item.Status == "Downloaded")
+                                                {
+                                                    <span class="badge bg-success">✔ Saved</span>
+                                                }
+                                                else if (item.Status == "Skipped")
+                                                {
+                                                    <span class="badge bg-warning text-dark">⏭️ Skipped</span>
+                                                }
+                                                else
+                                                {
+                                                    <span class="badge bg-danger">❌ Failed</span>
+                                                }
+                                            </td>
+                                            <td class="text-break fw-semibold">@item.RelativeFilePath</td>
+                                            <td class="text-break">
+                                                @if (item.Status == "Failed")
+                                                {
+                                                    <span class="text-danger">@item.ErrorMessage</span>
+                                                }
+                                                else
+                                                {
+                                                    <span class="text-muted">@((item.FileSizeBytes / 1024.0).ToString("N1")) KB</span>
+                                                }
+                                            </td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                    }
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    [Parameter] public AuthStatusResponse? AuthStatus { get; set; }
+    [Parameter] public EventCallback<string> OnLog { get; set; }
+
+    private string TemplateUrl = "";
+    private string ParentFolder = "";
+    private string LastAutoDetectedFolder = "";
+    private string FilePathTemplate = "subdir_{0}/subdir_{1}/file_{2}";
+    private string RawData = "";
+    private string DelimiterMode = "auto";
+    private bool SkipHeaderRow = false;
+    private string DuplicateMode = "overwrite";
+    private int MaxConcurrency = 4;
+
+    private char DetectedDelimiter = ',';
+    private List<string> HeaderColumns = new();
+    private List<List<string>> ParsedRows = new();
+    private bool IsProcessing = false;
+    private ReportExportBatchResult? LastBatchResult;
+    private string ResultFilter = "all";
+
+    private int MaxColumnsCount => ParsedRows.Count == 0 ? 0 : ParsedRows.Max(r => r.Count);
+
+    private string DetectedDelimiterLabel => DetectedDelimiter switch
+    {
+        '\t' => "TAB (\\t)",
+        ';' => "SEMICOLON (;)",
+        _ => "COMMA (,)"
+    };
+
+    private string ParentFolderDisplay
+    {
+        get
+        {
+            if (string.IsNullOrWhiteSpace(ParentFolder)) return "exported_reports";
+            return Path.GetFileName(ParentFolder.TrimEnd('/', '\\'));
+        }
+    }
+
+    private IEnumerable<ReportExportItemResult> FilteredResultItems
+    {
+        get
+        {
+            if (LastBatchResult?.Items == null) return Enumerable.Empty<ReportExportItemResult>();
+            return ResultFilter switch
+            {
+                "failed" => LastBatchResult.Items.Where(i => i.Status == "Failed"),
+                "downloaded" => LastBatchResult.Items.Where(i => i.Status == "Downloaded"),
+                _ => LastBatchResult.Items
+            };
+        }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        BridgeService.OnChange += OnBridgeChanged;
+        await LoadDefaultDirectoryAsync();
+    }
+
+    private async void OnBridgeChanged()
+    {
+        if (string.IsNullOrWhiteSpace(ParentFolder) || ParentFolder == LastAutoDetectedFolder)
+        {
+            await LoadDefaultDirectoryAsync();
+        }
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task LoadDefaultDirectoryAsync()
+    {
+        try
+        {
+            var def = await BridgeService.GetWithFallbackAsync<JsonElement>("api/tfsbridge/reports/default-directory", silentFallback: true);
+            if (def.ValueKind == JsonValueKind.Object && def.TryGetProperty("directory", out var d))
+            {
+                string detected = d.GetString() ?? "";
+                if (!string.IsNullOrWhiteSpace(detected))
+                {
+                    LastAutoDetectedFolder = detected;
+                    ParentFolder = detected;
+                }
+            }
+        }
+        catch { }
+    }
+
+    private async Task LogAsync(string msg) => await OnLog.InvokeAsync(msg);
+
+    private void OnTemplateUrlInput(ChangeEventArgs e)
+    {
+        TemplateUrl = e.Value?.ToString() ?? "";
+    }
+
+    private void OnFilePathTemplateInput(ChangeEventArgs e)
+    {
+        FilePathTemplate = e.Value?.ToString() ?? "";
+    }
+
+    private void OnRawDataInput(ChangeEventArgs e)
+    {
+        RawData = e.Value?.ToString() ?? "";
+        ReparsePreview();
+    }
+
+    private void OnDelimiterChanged(ChangeEventArgs e)
+    {
+        DelimiterMode = e.Value?.ToString() ?? "auto";
+        ReparsePreview();
+    }
+
+    private void OnSkipHeaderChanged(ChangeEventArgs e)
+    {
+        SkipHeaderRow = (bool)(e.Value ?? false);
+        ReparsePreview();
+    }
+
+    private void ReparsePreview()
+    {
+        ParsedRows = ReportExporterService.ParseRows(
+            RawData,
+            DelimiterMode,
+            SkipHeaderRow,
+            out DetectedDelimiter,
+            out HeaderColumns);
+    }
+
+    private async Task OnFileUploadedAsync(InputFileChangeEventArgs e)
+    {
+        try
+        {
+            var file = e.File;
+            if (file == null) return;
+            using var stream = file.OpenReadStream(maxAllowedSize: 15 * 1024 * 1024);
+            using var reader = new StreamReader(stream);
+            RawData = await reader.ReadToEndAsync();
+            ReparsePreview();
+            await LogAsync($"📂 Loaded file '{file.Name}' ({ParsedRows.Count} data row(s) detected).");
+        }
+        catch (Exception ex)
+        {
+            await LogAsync($"❌ File upload error: {ex.Message}");
+        }
+    }
+
+    private async Task PasteFromClipboardAsync()
+    {
+        try
+        {
+            string clip = await JS.InvokeAsync<string>("readTextFromClipboard");
+            if (!string.IsNullOrWhiteSpace(clip))
+            {
+                RawData = clip;
+                ReparsePreview();
+                await LogAsync($"✔ Pasted {ParsedRows.Count} row(s) from clipboard.");
+            }
+        }
+        catch (Exception ex)
+        {
+            await LogAsync($"❌ Clipboard error: {ex.Message}");
+        }
+    }
+
+    private void LoadSampleData()
+    {
+        if (string.IsNullOrWhiteSpace(TemplateUrl))
+        {
+            TemplateUrl = "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf?region={0}&dept={1}&doc={2}";
+        }
+        FilePathTemplate = "subdir_{0}/subdir_{1}/file_{2}";
+        SkipHeaderRow = true;
+        RawData = "Region,Department,DocumentId\nRiyadh,Motor,POL-1001\nRiyadh,Medical,POL-1002\nJeddah,Marine,POL-2001";
+        ReparsePreview();
+    }
+
+    private void ClearData()
+    {
+        RawData = "";
+        ParsedRows.Clear();
+        HeaderColumns.Clear();
+        LastBatchResult = null;
+    }
+
+    private async Task ExecuteBatchDownloadAsync()
+    {
+        if (ParsedRows.Count == 0 || string.IsNullOrWhiteSpace(TemplateUrl)) return;
+        IsProcessing = true;
+        LastBatchResult = null;
+        ResultFilter = "all";
+
+        try
+        {
+            var request = new ReportExportRequest
+            {
+                TemplateUrl = TemplateUrl,
+                ParentFolder = ParentFolder,
+                FilePathTemplate = FilePathTemplate,
+                RawData = RawData,
+                DelimiterMode = DelimiterMode,
+                SkipHeaderRow = SkipHeaderRow,
+                DuplicateMode = DuplicateMode,
+                MaxConcurrency = MaxConcurrency
+            };
+
+            using var resp = await BridgeService.PostWithFallbackAsync("api/tfsbridge/reports/export-batch", request);
+            var res = await resp.Content.ReadFromJsonAsync<OperationResponse<ReportExportBatchResult>>();
+
+            if (res?.Logs != null)
+            {
+                foreach (var l in res.Logs) await LogAsync(l);
+            }
+
+            if (res?.Success == true && res.Data != null)
+            {
+                LastBatchResult = res.Data;
+                if (LastBatchResult.FailedCount > 0)
+                {
+                    ResultFilter = "failed";
+                }
+            }
+            else if (!string.IsNullOrWhiteSpace(res?.Error))
+            {
+                await LogAsync($"❌ Batch export failed: {res.Error}");
+            }
+        }
+        catch (Exception ex)
+        {
+            await LogAsync($"❌ Error executing report batch: {ex.Message}");
+        }
+        finally
+        {
+            IsProcessing = false;
+        }
+    }
+
+    private async Task OpenOutputFolderOnWorkstationAsync()
+    {
+        if (LastBatchResult == null || string.IsNullOrWhiteSpace(LastBatchResult.OutputDirectory)) return;
+        try
+        {
+            await BridgeService.PostWithFallbackAsync(
+                "api/tfsbridge/reports/open-folder",
+                new OpenFolderRequest { FilePath = LastBatchResult.OutputDirectory },
+                silentFallback: true);
+        }
+        catch (Exception ex)
+        {
+            await LogAsync($"⚠️ Could not open folder: {ex.Message}");
+        }
+    }
+
+    public void Dispose()
+    {
+        BridgeService.OnChange -= OnBridgeChanged;
+    }
+}

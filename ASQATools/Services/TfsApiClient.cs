@@ -2,6 +2,7 @@ using ASQATools.Shared.Models;
 using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Http.Headers;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -29,9 +30,10 @@ public class TfsApiClient
             return patClient;
         }
 
-        string cacheKey = creds != null
-            ? $"{creds.Domain}\\{creds.UserName}:{creds.Password}"
+        string rawIdentity = creds != null
+            ? $"{creds.Domain?.ToLowerInvariant()}\\{creds.UserName?.ToLowerInvariant()}:{creds.Password}"
             : "DEFAULT_NTLM_CREDENTIALS";
+        string cacheKey = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(rawIdentity)));
 
         var handler = _handlerCache.GetOrAdd(cacheKey, _ => new SocketsHttpHandler
         {

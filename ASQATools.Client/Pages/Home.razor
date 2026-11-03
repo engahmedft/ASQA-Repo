@@ -5,6 +5,7 @@
 @using ASQATools.Client.Components.Admin
 @using ASQATools.Client.Components.PrEngine
 @using ASQATools.Client.Components.Codebase
+@using ASQATools.Client.Components.Reports
 @inject HttpClient Http
 
 <AppNavBar @bind-CurrentTool="CurrentTool"
@@ -45,7 +46,7 @@
         }
         else if (CurrentTool == "reports" && HasPermission("reports"))
         {
-            <div class="card p-5 text-center shadow-sm border bg-white"><h4 class="text-dark">📑 Report Extractor</h4><p class="text-muted">Module ready.</p></div>
+            <ReportExtractor AuthStatus="AuthStatus" OnLog="AddLog" />
         }
         else
         {

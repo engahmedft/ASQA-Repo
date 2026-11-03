@@ -39,5 +39,8 @@
     <Content Remove="pr_reviews_data\**\*" />
     <None Remove="pr_reviews_data\**\*" />
     <Compile Remove="pr_reviews_data\**\*" />
+    <Content Remove="exported_reports\**\*" />
+    <None Remove="exported_reports\**\*" />
+    <Compile Remove="exported_reports\**\*" />
   </ItemGroup>
 </Project>

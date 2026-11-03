@@ -52,4 +52,33 @@ public class RbacSecurityServiceTests
             if (Directory.Exists(tempDir)) Directory.Delete(tempDir, recursive: true);
         }
     }
+
+    [Fact]
+    public void GetDatabase_ShouldCreateBackupFile_WhenEncryptedStorageCannotBeDecrypted()
+    {
+        string tempDir = Path.Combine(Path.GetTempPath(), "ASQA_RBAC_BACKUP_TEST_" + Guid.NewGuid().ToString("N"));
+        string appData = Path.Combine(tempDir, "App_Data");
+        Directory.CreateDirectory(appData);
+
+        try
+        {
+            File.WriteAllBytes(Path.Combine(appData, "security_db.enc"), new byte[] { 1, 2, 3, 4, 5 });
+
+            var mockEnv = new Mock<IWebHostEnvironment>();
+            mockEnv.Setup(e => e.ContentRootPath).Returns(tempDir);
+
+            var provider = DataProtectionProvider.Create(new DirectoryInfo(Path.Combine(tempDir, "keys")));
+            var rbac = new RbacSecurityService(provider, mockEnv.Object);
+
+            var db = rbac.GetDatabase();
+            Assert.NotEmpty(db.Roles);
+
+            var backups = Directory.GetFiles(appData, "security_db.enc.bak_*");
+            Assert.NotEmpty(backups);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir)) Directory.Delete(tempDir, recursive: true);
+        }
+    }
 }

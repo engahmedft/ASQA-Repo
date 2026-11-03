@@ -5,6 +5,7 @@ namespace ASQATools.Client.Services;
 
 public class ClientBridgeService : IDisposable
 {
+    private const string BridgeSecurityHeader = "X-ASQA-Bridge-Client";
     private readonly HttpClient _http;
     private PeriodicTimer? _timer;
     private CancellationTokenSource? _cts;
@@ -36,9 +37,7 @@ public class ClientBridgeService : IDisposable
                 {
                     try
                     {
-                        using var pingCts = new CancellationTokenSource(TimeSpan.FromMilliseconds(1000));
-                        using var client = new HttpClient { Timeout = TimeSpan.FromMilliseconds(1000) };
-                        var res = await client.GetFromJsonAsync<ClientAgentInfoDto>($"http://127.0.0.1:{CurrentPort}/health", pingCts.Token);
+                        var res = await FetchHealthAsync(CurrentPort, timeoutMs: 1000);
                         if (res == null || res.Service != "ASQA.LocalBridge")
                         {
                             HandleDisconnect();
@@ -77,10 +76,19 @@ public class ClientBridgeService : IDisposable
             }
             else
             {
-                if (await ProbePortAsync(5173)) return true;
-                for (int p = 5174; p <= 5185; p++)
+                // Fast check default port 5173 first
+                if (await ProbePortAsync(5173, timeoutMs: 600)) return true;
+
+                // Probe remaining ports 5174..5185 concurrently so offline discovery completes in <1s
+                var ports = Enumerable.Range(5174, 12);
+                var probeTasks = ports.Select(p => FetchHealthAsync(p, timeoutMs: 800)).ToArray();
+                var results = await Task.WhenAll(probeTasks);
+
+                var match = results.FirstOrDefault(r => r != null && r.Service == "ASQA.LocalBridge");
+                if (match != null)
                 {
-                    if (await ProbePortAsync(p)) return true;
+                    SetConnected(match);
+                    return true;
                 }
             }
         }
@@ -93,24 +101,114 @@ public class ClientBridgeService : IDisposable
         return false;
     }
 
-    private async Task<bool> ProbePortAsync(int port)
+    private async Task<bool> ProbePortAsync(int port, int timeoutMs = 900)
+    {
+        var res = await FetchHealthAsync(port, timeoutMs);
+        if (res != null && res.Service == "ASQA.LocalBridge")
+        {
+            SetConnected(res);
+            return true;
+        }
+        return false;
+    }
+
+    private void SetConnected(ClientAgentInfoDto res)
+    {
+        CurrentPort = res.Port;
+        ConnectedAgent = res;
+        OnLog?.Invoke($"✔ [DESKTOP BRIDGE] Connected on port {res.Port} | Workstation: '{res.MachineName}' | User: '{res.UserName}' | OS: '{res.OsVersion}' | .NET Runtime: '{res.DotnetVersion}'");
+        Notify();
+    }
+
+    private async Task<ClientAgentInfoDto?> FetchHealthAsync(int port, int timeoutMs)
     {
         try
         {
-            using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(1000));
-            using var client = new HttpClient { Timeout = TimeSpan.FromMilliseconds(1000) };
-            var res = await client.GetFromJsonAsync<ClientAgentInfoDto>($"http://127.0.0.1:{port}/health", cts.Token);
-            if (res != null && res.Service == "ASQA.LocalBridge")
+            using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(timeoutMs));
+            using var req = new HttpRequestMessage(HttpMethod.Get, $"http://127.0.0.1:{port}/health");
+            req.Headers.TryAddWithoutValidation(BridgeSecurityHeader, "1");
+            using var resp = await _http.SendAsync(req, cts.Token);
+            if (!resp.IsSuccessStatusCode) return null;
+            return await resp.Content.ReadFromJsonAsync<ClientAgentInfoDto>(cancellationToken: cts.Token);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Executes a GET request against LocalBridge first when connected, automatically falling back to the Server on error or when offline.
+    /// </summary>
+    public async Task<TResponse?> GetWithFallbackAsync<TResponse>(string relativeEndpoint, bool silentFallback = false)
+    {
+        string cleanPath = relativeEndpoint.TrimStart('/');
+
+        if (IsConnected)
+        {
+            try
             {
-                CurrentPort = res.Port;
-                ConnectedAgent = res;
-                OnLog?.Invoke($"✔ [DESKTOP BRIDGE] Connected on port {res.Port} | Workstation: '{res.MachineName}' | User: '{res.UserName}' | OS: '{res.OsVersion}' | .NET Runtime: '{res.DotnetVersion}'");
-                Notify();
-                return true;
+                using var req = new HttpRequestMessage(HttpMethod.Get, $"http://127.0.0.1:{CurrentPort}/{cleanPath}");
+                req.Headers.TryAddWithoutValidation(BridgeSecurityHeader, "1");
+                using var resp = await _http.SendAsync(req);
+                if (resp.IsSuccessStatusCode)
+                {
+                    return await resp.Content.ReadFromJsonAsync<TResponse>();
+                }
+                OnLog?.Invoke($"⚠️ [BRIDGE FALLBACK] Local Agent returned HTTP {(int)resp.StatusCode} for '{cleanPath}'. Falling back to Server...");
+            }
+            catch (Exception ex)
+            {
+                HandleDisconnect();
+                OnLog?.Invoke($"⚠️ [BRIDGE FALLBACK] Local Agent unreachable for '{cleanPath}' ({ex.Message}). Falling back to Server...");
             }
         }
-        catch { }
-        return false;
+        else if (!silentFallback)
+        {
+            OnLog?.Invoke($"🌐 [SERVER FALLBACK] Desktop Bridge is offline — executing '{cleanPath}' on Server.");
+        }
+
+        return await _http.GetFromJsonAsync<TResponse>(cleanPath);
+    }
+
+    /// <summary>
+    /// Executes a POST request against LocalBridge first when connected, automatically falling back to the Server on error or when offline.
+    /// </summary>
+    public async Task<HttpResponseMessage> PostWithFallbackAsync<TRequest>(string relativeEndpoint, TRequest payload, bool silentFallback = false)
+    {
+        string cleanPath = relativeEndpoint.TrimStart('/');
+
+        if (IsConnected)
+        {
+            try
+            {
+                using var req = new HttpRequestMessage(HttpMethod.Post, $"http://127.0.0.1:{CurrentPort}/{cleanPath}")
+                {
+                    Content = JsonContent.Create(payload)
+                };
+                req.Headers.TryAddWithoutValidation(BridgeSecurityHeader, "1");
+
+                var resp = await _http.SendAsync(req);
+                if (resp.IsSuccessStatusCode)
+                {
+                    return resp;
+                }
+
+                resp.Dispose();
+                OnLog?.Invoke($"⚠️ [BRIDGE FALLBACK] Local Agent returned HTTP {(int)resp.StatusCode} for '{cleanPath}'. Retrying on Server...");
+            }
+            catch (Exception ex)
+            {
+                HandleDisconnect();
+                OnLog?.Invoke($"⚠️ [BRIDGE FALLBACK] Local Agent failed on '{cleanPath}' ({ex.Message}). Retrying on Server...");
+            }
+        }
+        else if (!silentFallback)
+        {
+            OnLog?.Invoke($"🌐 [SERVER FALLBACK] Desktop Bridge is offline — executing '{cleanPath}' on Server.");
+        }
+
+        return await _http.PostAsJsonAsync(cleanPath, payload);
     }
 
     public async Task StopAgentAsync()
@@ -119,8 +217,10 @@ public class ClientBridgeService : IDisposable
         int port = CurrentPort;
         try
         {
-            using var client = new HttpClient { Timeout = TimeSpan.FromMilliseconds(1500) };
-            await client.PostAsync($"http://127.0.0.1:{port}/shutdown", null);
+            using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(1500));
+            using var req = new HttpRequestMessage(HttpMethod.Post, $"http://127.0.0.1:{port}/shutdown");
+            req.Headers.TryAddWithoutValidation(BridgeSecurityHeader, "1");
+            await _http.SendAsync(req, cts.Token);
         }
         catch { }
 

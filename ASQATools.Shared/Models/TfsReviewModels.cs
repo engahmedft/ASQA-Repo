@@ -160,6 +160,7 @@ public class ReflectReviewResult
 {
     public string Message { get; set; } = string.Empty;
     public string SavedFilePath { get; set; } = string.Empty;
+    public string PrWebUrl { get; set; } = string.Empty;
 }
 
 public class ClearReviewRequest
@@ -495,4 +496,41 @@ public class CodeReflectorApplyRequest
 public class OpenFolderRequest
 {
     public string FilePath { get; set; } = string.Empty;
+}
+
+public class ReportExportRequest
+{
+    public string TemplateUrl { get; set; } = string.Empty;
+    public string ParentFolder { get; set; } = string.Empty;
+    public string FilePathTemplate { get; set; } = "file_{0}.pdf";
+    public string RawData { get; set; } = string.Empty;
+    public string DelimiterMode { get; set; } = "auto";
+    public bool SkipHeaderRow { get; set; } = false;
+    public string DuplicateMode { get; set; } = "overwrite";
+    public int MaxConcurrency { get; set; } = 4;
+    public bool CreateZipArchive { get; set; } = false;
+}
+
+public class ReportExportItemResult
+{
+    public int RowNumber { get; set; }
+    public List<string> Values { get; set; } = new();
+    public string ResolvedUrl { get; set; } = string.Empty;
+    public string RelativeFilePath { get; set; } = string.Empty;
+    public string FullSavedPath { get; set; } = string.Empty;
+    public string Status { get; set; } = "Downloaded";
+    public long FileSizeBytes { get; set; }
+    public string? ErrorMessage { get; set; }
+}
+
+public class ReportExportBatchResult
+{
+    public string OutputDirectory { get; set; } = string.Empty;
+    public string? ZipFilePath { get; set; }
+    public int TotalRows { get; set; }
+    public int DownloadedCount { get; set; }
+    public int SkippedCount { get; set; }
+    public int FailedCount { get; set; }
+    public long TotalBytesDownloaded { get; set; }
+    public List<ReportExportItemResult> Items { get; set; } = new();
 }

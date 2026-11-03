@@ -1,5 +1,6 @@
 @using ASQATools.Client.Services
 @inject ClientBridgeService BridgeService
+@implements IDisposable
 
 @if (Show)
 {
@@ -148,6 +149,13 @@
 
     protected override void OnInitialized()
     {
-        BridgeService.OnChange += StateHasChanged;
+        BridgeService.OnChange += OnBridgeChanged;
+    }
+
+    private void OnBridgeChanged() => InvokeAsync(StateHasChanged);
+
+    public void Dispose()
+    {
+        BridgeService.OnChange -= OnBridgeChanged;
     }
 }

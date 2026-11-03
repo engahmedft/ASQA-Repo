@@ -53,6 +53,12 @@ public class PrReviewEngineService
         NumberHandling = JsonNumberHandling.AllowReadingFromString
     };
 
+    private readonly record struct FileChangeWorkItem(
+        string Kind,
+        string? SkippedLabel,
+        string? LogMsg,
+        (TfsChangeEntry Change, string? OldContent, string? NewContent, string? DiffText)? Entry);
+
     public PrReviewEngineService(TfsApiClient tfs)
     {
         _tfs = tfs;
@@ -339,74 +345,127 @@ public class PrReviewEngineService
         string targetVersion = pr.LastMergeTargetCommit?.CommitId ?? pr.TargetRefName ?? "target";
         string sourceVersion = pr.LastMergeSourceCommit?.CommitId ?? pr.SourceRefName ?? "source";
 
-        foreach (var change in changes)
-        {
-            if (change?.Item == null || string.IsNullOrWhiteSpace(change.Item.Path) || change.Item.IsFolder) continue;
+        var validChanges = changes
+            .Where(c => c?.Item != null && !string.IsNullOrWhiteSpace(c.Item.Path) && !c.Item.IsFolder)
+            .ToList();
 
+        using var fetchLimiter = new SemaphoreSlim(8);
+        var processedTasks = validChanges.Select(async change =>
+        {
             string filePath = change.Item.Path;
             string fileName = Path.GetFileName(filePath);
 
             if (IsExcludedFile(filePath, out string reason))
             {
-                if (reason == "Binary format") summary.SkippedBinary++; else summary.SkippedExcluded++;
-                summary.SkippedFileNames.Add($"{fileName} ({reason})");
-                Log($"  🚫 Excluded {fileName} [{reason}]");
-                continue;
+                return new FileChangeWorkItem(
+                    reason == "Binary format" ? "ExcludedBinary" : "ExcludedConfig",
+                    $"{fileName} ({reason})",
+                    $"  🚫 Excluded {fileName} [{reason}]",
+                    null);
             }
 
             string ctype = change.ChangeType?.ToLowerInvariant() ?? "";
             if (ctype.Contains("delete"))
             {
-                summary.Deleted++;
-                filesToProcess.Add((change, null, null, null));
-                continue;
+                return new FileChangeWorkItem("Deleted", null, null, (change, null, null, null));
             }
 
-            if (ctype.Contains("add"))
-            {
-                summary.Added++;
-                try
-                {
-                    string newContent = await _tfs.GetFileContentAsync(client, serverUrl, collection, project, repo, filePath, sourceVersion);
-                    filesToProcess.Add((change, null, newContent, null));
-                }
-                catch (Exception ex)
-                {
-                    Log($"  ⚠️ Could not fetch added file {fileName}: {ex.Message}");
-                }
-                continue;
-            }
-
+            await fetchLimiter.WaitAsync();
             try
             {
-                string newContent = await _tfs.GetFileContentAsync(client, serverUrl, collection, project, repo, filePath, sourceVersion);
-                string oldContent = await _tfs.GetFileContentAsync(client, serverUrl, collection, project, repo, filePath, targetVersion);
-
-                if (FastDiffEngine.HasOnlyWhitespaceOrNewlineChanges(oldContent, newContent))
+                if (ctype.Contains("add"))
                 {
-                    summary.SkippedFormatting++;
-                    summary.SkippedFileNames.Add($"{fileName} (Formatting/Whitespace Only)");
-                    Log($"  ⚡ Skipped {fileName}: only formatting / whitespace changed.");
-                    continue;
+                    try
+                    {
+                        string newContent = await _tfs.GetFileContentAsync(client, serverUrl, collection, project, repo, filePath, sourceVersion);
+                        return new FileChangeWorkItem("Added", null, null, (change, null, newContent, null));
+                    }
+                    catch (Exception ex)
+                    {
+                        return new FileChangeWorkItem("AddedError", null, $"  ⚠️ Could not fetch added file {fileName}: {ex.Message}", null);
+                    }
                 }
 
-                string diff = FastDiffEngine.GenerateUnifiedDiffWithLineNumbers(oldContent, newContent, contextLines: contextLines);
-                if (ctype.Contains("rename")) summary.Renamed++; else summary.Edited++;
-                filesToProcess.Add((change, oldContent, newContent, diff));
-            }
-            catch
-            {
                 try
                 {
-                    string newContent = await _tfs.GetFileContentAsync(client, serverUrl, collection, project, repo, filePath, sourceVersion);
-                    summary.Edited++;
-                    filesToProcess.Add((change, null, newContent, null));
+                    var newTask = _tfs.GetFileContentAsync(client, serverUrl, collection, project, repo, filePath, sourceVersion);
+                    var oldTask = _tfs.GetFileContentAsync(client, serverUrl, collection, project, repo, filePath, targetVersion);
+                    await Task.WhenAll(newTask, oldTask);
+                    string newContent = newTask.Result;
+                    string oldContent = oldTask.Result;
+
+                    if (FastDiffEngine.HasOnlyWhitespaceOrNewlineChanges(oldContent, newContent))
+                    {
+                        return new FileChangeWorkItem(
+                            "SkippedFormatting",
+                            $"{fileName} (Formatting/Whitespace Only)",
+                            $"  ⚡ Skipped {fileName}: only formatting / whitespace changed.",
+                            null);
+                    }
+
+                    string diff = FastDiffEngine.GenerateUnifiedDiffWithLineNumbers(oldContent, newContent, contextLines: contextLines);
+                    return new FileChangeWorkItem(
+                        ctype.Contains("rename") ? "Renamed" : "Edited",
+                        null,
+                        null,
+                        (change, oldContent, newContent, diff));
                 }
-                catch (Exception ex)
+                catch
                 {
-                    Log($"  ❌ Could not load content for {fileName}: {ex.Message}");
+                    try
+                    {
+                        string newContent = await _tfs.GetFileContentAsync(client, serverUrl, collection, project, repo, filePath, sourceVersion);
+                        return new FileChangeWorkItem("Edited", null, null, (change, null, newContent, null));
+                    }
+                    catch (Exception ex)
+                    {
+                        return new FileChangeWorkItem("Error", null, $"  ❌ Could not load content for {fileName}: {ex.Message}", null);
+                    }
                 }
             }
+            finally
+            {
+                fetchLimiter.Release();
+            }
+        }).ToArray();
+
+        var processedResults = await Task.WhenAll(processedTasks);
+        foreach (var item in processedResults)
+        {
+            switch (item.Kind)
+            {
+                case "ExcludedBinary":
+                    summary.SkippedBinary++;
+                    if (item.SkippedLabel != null) summary.SkippedFileNames.Add(item.SkippedLabel);
+                    break;
+                case "ExcludedConfig":
+                    summary.SkippedExcluded++;
+                    if (item.SkippedLabel != null) summary.SkippedFileNames.Add(item.SkippedLabel);
+                    break;
+                case "Deleted":
+                    summary.Deleted++;
+                    break;
+                case "Added":
+                case "AddedError":
+                    summary.Added++;
+                    break;
+                case "SkippedFormatting":
+                    summary.SkippedFormatting++;
+                    if (item.SkippedLabel != null) summary.SkippedFileNames.Add(item.SkippedLabel);
+                    break;
+                case "Renamed":
+                    summary.Renamed++;
+                    break;
+                case "Edited":
+                    summary.Edited++;
+                    break;
+            }
+
+            if (!string.IsNullOrEmpty(item.LogMsg))
+                Log(item.LogMsg);
+
+            if (item.Entry.HasValue)
+                filesToProcess.Add(item.Entry.Value);
         }
 
         Log("✔ PULL REQUEST FILE CHANGES SUMMARY:");
@@ -587,8 +646,6 @@ Branch divergence exists. You MUST start your '### 📋 Executive Summary' with 
         await File.WriteAllTextAsync(savePath, bundleText, Encoding.UTF8);
 
         Log($"✔ PR bundle file saved: {savePath}");
-        CopyFileToWindowsClipboard(savePath);
-        Log($"✔ Bundle file copied to clipboard: {Path.GetFileName(savePath)}");
         Log($"  * Metrics: {summary.TotalChanges} changes, ~{bundleText.Length / 4:N0} tokens.");
 
         return new PrExportBundleResult
@@ -607,7 +664,7 @@ Branch divergence exists. You MUST start your '### 📋 Executive Summary' with 
         };
     }
 
-    public async Task<string> ReflectReviewAsync(string rawJsonPayload, bool confirmApproval, NetworkCredential? creds, string? patToken, string fallbackPrInput)
+    public async Task<(string SavedFilePath, string PrWebUrl)> ReflectReviewAsync(string rawJsonPayload, bool confirmApproval, NetworkCredential? creds, string? patToken, string fallbackPrInput)
     {
         Log("Parsing review payload JSON...");
         string cleanedJson = CleanJsonText(rawJsonPayload);
@@ -853,11 +910,12 @@ Branch divergence exists. You MUST start your '### 📋 Executive Summary' with 
         string savePath = Path.Combine(saveDir, $"AI_Review_{prId}_Reflected_{timeStamp}.txt");
         await File.WriteAllTextAsync(savePath, cleanedJson, Encoding.UTF8);
 
-        OpenPrInBrowser(fallbackPrInput, cleanedJson);
-        return savePath;
+        string prWebUrl = $"{serverUrl.TrimEnd('/')}/{collection}/{project}/_git/{repo}/pullrequest/{prId}";
+        Log($"🌐 PR Review URL: {prWebUrl}");
+        return (savePath, prWebUrl);
     }
 
-    public async Task ClearReviewAsync(string prInput, NetworkCredential? creds, string? patToken)
+    public async Task<string> ClearReviewAsync(string prInput, NetworkCredential? creds, string? patToken)
     {
         using var client = _tfs.CreateClient(creds, patToken);
         var (serverUrl, collection, project, repo, prId) = ParsePrInput(prInput);
@@ -881,7 +939,9 @@ Branch divergence exists. You MUST start your '### 📋 Executive Summary' with 
         Log($"[PURGED] Deleted {deletedCount} automated AI review thread(s).");
         Log("Resetting reviewer vote to 0...");
         await _tfs.VotePullRequestAsync(client, serverUrl, collection, project, repo, prId, 0);
-        OpenPrInBrowser(prInput);
+        string prWebUrl = $"{serverUrl.TrimEnd('/')}/{collection}/{project}/_git/{repo}/pullrequest/{prId}";
+        Log($"🌐 PR Review URL: {prWebUrl}");
+        return prWebUrl;
     }
 
     public async Task<(string ThreadsText, string SavedFilePath)> ExtractThreadsAsync(
@@ -995,7 +1055,6 @@ Branch divergence exists. You MUST start your '### 📋 Executive Summary' with 
         string savePath = Path.Combine(saveDir, $"PR_Discussions_{prId}_{sanitizedTitle}_{timeStamp}.txt");
         await File.WriteAllTextAsync(savePath, bundleText, Encoding.UTF8);
 
-        CopyFileToWindowsClipboard(savePath);
         Log($"✔ PR discussions export completed: {totalThreads} thread(s), {totalComments} comment(s).");
         Log($"  * Saved File: {savePath}");
 

@@ -7,6 +7,8 @@ public static class FastDiffEngine
     private enum DiffOp { Unchanged, Added, Deleted }
     private record struct DiffEntry(DiffOp Op, int? OldLine, int? NewLine, string Text);
 
+    private const long MaxMatrixCells = 4_000_000;
+
     public static bool HasOnlyWhitespaceOrNewlineChanges(string? oldText, string? newText)
     {
         if (ReferenceEquals(oldText, newText) || string.Equals(oldText, newText, StringComparison.Ordinal))
@@ -57,45 +59,80 @@ public static class FastDiffEngine
         int n = oldLines.Length;
         int m = newLines.Length;
 
-        if (n > 1500 || m > 1500)
+        // Trim common unchanged prefix and suffix lines to minimize the LCS DP matrix size
+        int prefix = 0;
+        while (prefix < n && prefix < m && oldLines[prefix] == newLines[prefix])
+        {
+            prefix++;
+        }
+
+        int suffix = 0;
+        while (suffix < (n - prefix) && suffix < (m - prefix) &&
+               oldLines[n - 1 - suffix] == newLines[m - 1 - suffix])
+        {
+            suffix++;
+        }
+
+        int midN = n - prefix - suffix;
+        int midM = m - prefix - suffix;
+
+        if ((long)midN * midM > MaxMatrixCells)
             return "--- [FILE TOO LARGE FOR INLINE MATRIX DIFF - REFER TO FULL PROPOSED FILE] ---";
 
-        int[,] dp = new int[n + 1, m + 1];
-        for (int i = 0; i < n; i++)
+        var diffEntries = new List<DiffEntry>(Math.Max(n, m));
+
+        for (int i = 0; i < prefix; i++)
         {
-            for (int j = 0; j < m; j++)
-            {
-                if (oldLines[i] == newLines[j])
-                    dp[i + 1, j + 1] = dp[i, j] + 1;
-                else
-                    dp[i + 1, j + 1] = Math.Max(dp[i + 1, j], dp[i, j + 1]);
-            }
+            diffEntries.Add(new DiffEntry(DiffOp.Unchanged, i + 1, i + 1, oldLines[i]));
         }
 
-        var diffEntries = new List<DiffEntry>();
-        int x = n, y = m;
-
-        while (x > 0 || y > 0)
+        if (midN > 0 || midM > 0)
         {
-            if (x > 0 && y > 0 && oldLines[x - 1] == newLines[y - 1])
+            int[,] dp = new int[midN + 1, midM + 1];
+            for (int i = 0; i < midN; i++)
             {
-                diffEntries.Add(new DiffEntry(DiffOp.Unchanged, x, y, oldLines[x - 1]));
-                x--;
-                y--;
+                for (int j = 0; j < midM; j++)
+                {
+                    if (oldLines[prefix + i] == newLines[prefix + j])
+                        dp[i + 1, j + 1] = dp[i, j] + 1;
+                    else
+                        dp[i + 1, j + 1] = Math.Max(dp[i + 1, j], dp[i, j + 1]);
+                }
             }
-            else if (y > 0 && (x == 0 || dp[x, y - 1] >= dp[x - 1, y]))
+
+            var midEntries = new List<DiffEntry>(midN + midM);
+            int x = midN, y = midM;
+
+            while (x > 0 || y > 0)
             {
-                diffEntries.Add(new DiffEntry(DiffOp.Added, null, y, newLines[y - 1]));
-                y--;
+                if (x > 0 && y > 0 && oldLines[prefix + x - 1] == newLines[prefix + y - 1])
+                {
+                    midEntries.Add(new DiffEntry(DiffOp.Unchanged, prefix + x, prefix + y, oldLines[prefix + x - 1]));
+                    x--;
+                    y--;
+                }
+                else if (y > 0 && (x == 0 || dp[x, y - 1] >= dp[x - 1, y]))
+                {
+                    midEntries.Add(new DiffEntry(DiffOp.Added, null, prefix + y, newLines[prefix + y - 1]));
+                    y--;
+                }
+                else if (x > 0 && (y == 0 || dp[x, y - 1] < dp[x - 1, y]))
+                {
+                    midEntries.Add(new DiffEntry(DiffOp.Deleted, prefix + x, null, oldLines[prefix + x - 1]));
+                    x--;
+                }
             }
-            else if (x > 0 && (y == 0 || dp[x, y - 1] < dp[x - 1, y]))
-            {
-                diffEntries.Add(new DiffEntry(DiffOp.Deleted, x, null, oldLines[x - 1]));
-                x--;
-            }
+
+            midEntries.Reverse();
+            diffEntries.AddRange(midEntries);
         }
 
-        diffEntries.Reverse();
+        for (int i = 0; i < suffix; i++)
+        {
+            int oldIdx = n - suffix + i;
+            int newIdx = m - suffix + i;
+            diffEntries.Add(new DiffEntry(DiffOp.Unchanged, oldIdx + 1, newIdx + 1, oldLines[oldIdx]));
+        }
 
         var sb = new StringBuilder();
         int total = diffEntries.Count;

@@ -1,9 +1,17 @@
 using Microsoft.AspNetCore.Authentication.Cookies;
+using Microsoft.AspNetCore.DataProtection;
 using ASQATools.Services;
+using ASQATools.Shared.Services;
 using ASQATools.Components;
 using System.Diagnostics;
 
 var builder = WebApplication.CreateBuilder(args);
+
+string keysFolder = Path.Combine(builder.Environment.ContentRootPath, "App_Data", "keys");
+Directory.CreateDirectory(keysFolder);
+builder.Services.AddDataProtection()
+    .PersistKeysToFileSystem(new DirectoryInfo(keysFolder))
+    .SetApplicationName("ASQATools");
 
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<DomainCredentialProvider>();
@@ -13,6 +21,7 @@ builder.Services.AddScoped<TfsApiClient>();
 builder.Services.AddScoped<PrReviewEngineService>();
 builder.Services.AddScoped<CodebaseExporterService>();
 builder.Services.AddScoped<CodeReflectorService>();
+builder.Services.AddScoped<ReportExporterService>();
 builder.Services.AddSingleton<RbacSecurityService>();
 
 builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)

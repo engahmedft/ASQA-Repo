@@ -6,4 +6,8 @@
     <!-- UseAppHost false ensures compilation output is .dll only (Bypasses AppLocker) -->
     <UseAppHost>false</UseAppHost>
   </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ASQATools.Shared\ASQATools.Shared.csproj" />
+  </ItemGroup>
 </Project>
